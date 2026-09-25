@@ -382,8 +382,10 @@ const server = createServer(
         "/app.js": "app.js",
         "/workspace.js": "workspace.js",
         "/conversation.js": "conversation.js",
+        "/theme.js": "theme.js",
         "/style.css": "style.css",
         "/conversation.css": "conversation.css",
+        "/theme.css": "theme.css",
         "/favicon.svg": "favicon.svg",
         "/robots.txt": "robots.txt",
       };

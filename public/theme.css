@@ -1,0 +1,163 @@
+:root {
+  --bg: #101314;
+  --surface: #181c1e;
+  --raised: #1e2426;
+  --line: #2a3032;
+  --text: #e5eae7;
+  --muted: #8d9a94;
+  --green: #a5e1be;
+  --yellow: #eac38b;
+  --red: #f1a59d;
+}
+
+:root[data-resolved-theme="light"] {
+  color-scheme: light;
+  --bg: #f5f7f6;
+  --surface: #ffffff;
+  --raised: #edf1ee;
+  --line: #d9e1dc;
+  --text: #202923;
+  --muted: #68766e;
+  --green: #246b45;
+  --yellow: #8a5b14;
+  --red: #a13c34;
+}
+
+:root[data-resolved-theme="dark"] {
+  color-scheme: dark;
+}
+
+.theme-switcher {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface);
+}
+
+.theme-switcher button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 30px;
+  padding: 4px 8px;
+  color: var(--muted);
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.theme-switcher button span {
+  font-size: 14px;
+}
+
+.theme-switcher button em {
+  font-style: normal;
+}
+
+.theme-switcher button.active {
+  color: var(--text);
+  background: var(--raised);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+.theme-switcher button:focus-visible {
+  outline: 2px solid var(--green);
+  outline-offset: 2px;
+}
+
+:root[data-resolved-theme="light"] body {
+  background: var(--bg);
+  color: var(--text);
+}
+
+:root[data-resolved-theme="light"] :is(
+  .sidebar, .panel, dialog, .stat, .task-card, .runtime-card, table,
+  .message, .briefing-column, .briefing-item, .task-brief,
+  .task-brief-detail, .task-brief-detail-grid article, .activity-row,
+  .filters, .theme-switcher
+) {
+  background-color: var(--surface);
+  color: var(--text);
+  border-color: var(--line);
+}
+
+:root[data-resolved-theme="light"] :is(
+  header, .version, .task-meta, .panel-header, th, td,
+  .task-brief-detail-grid, .briefing-evidence-lines
+) {
+  border-color: var(--line);
+}
+
+:root[data-resolved-theme="light"] :is(
+  .nav.active, .filter.active, .briefing-shell, .briefing-column,
+  .briefing-next-move, .task-brief-detail, .task-brief-detail-grid article,
+  .message.user, .notice, .approval-context, .approval-request .message,
+  .action-choice, .proposal, .secondary
+) {
+  background-color: var(--raised);
+  color: var(--text);
+  border-color: var(--line);
+}
+
+:root[data-resolved-theme="light"] :is(
+  input, textarea, select, pre, .execution-meta span,
+  .execution-panel span, .briefing-item, .briefing-feedback button
+) {
+  background-color: #fff;
+  color: var(--text);
+  border-color: var(--line);
+}
+
+:root[data-resolved-theme="light"] :is(
+  .breadcrumb span, .repo, .task-meta .watch, .panel-section h3,
+  .signal-copy strong, .notice, .briefing-status strong,
+  .briefing-item h4, .briefing-item > strong, .task-brief em,
+  .approval-context strong, .action-choice strong
+) {
+  color: var(--text);
+}
+
+:root[data-resolved-theme="light"] .primary {
+  background: var(--green);
+  color: #fff;
+}
+
+:root[data-resolved-theme="light"] .theme-switcher button.active {
+  background: #dce9e0;
+  color: #17472e;
+  box-shadow: inset 0 0 0 1px #a9c6b3;
+}
+
+:root[data-resolved-theme="light"] .attention-card {
+  background: #fffaf0;
+  border-color: #ead9b7;
+}
+
+:root[data-resolved-theme="light"] .badge,
+:root[data-resolved-theme="light"] .nav b {
+  background: #edf1ee;
+  color: #43534a;
+}
+
+:root[data-resolved-theme="light"] #toast {
+  background: #20352a;
+  color: #fff;
+}
+
+@media (max-width: 700px) {
+  .theme-switcher {
+    gap: 0;
+    padding: 2px;
+  }
+
+  .theme-switcher button {
+    min-height: 28px;
+    padding: 4px 5px;
+    gap: 3px;
+    font-size: 9px;
+  }
+}
