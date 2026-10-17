@@ -50,14 +50,18 @@
 
   applyTheme(storedTheme(), false);
 
-  document.addEventListener("DOMContentLoaded", () => {
+  function bindControls() {
     updateControls(root.dataset.theme || "system");
     document.querySelectorAll("[data-theme-choice]").forEach((button) => {
       button.addEventListener("click", () =>
         applyTheme(button.dataset.themeChoice, true),
       );
     });
-  });
+  }
+
+  if (document.readyState === "loading")
+    document.addEventListener("DOMContentLoaded", bindControls, { once: true });
+  else bindControls();
 
   const handleSystemChange = () => {
     if ((root.dataset.theme || "system") === "system")

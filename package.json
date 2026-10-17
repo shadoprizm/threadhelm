@@ -1,14 +1,15 @@
 {
   "name": "threadhelm",
-  "version": "0.4.1",
+  "version": "0.5.0-rc.1",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "tsx src/server.ts",
     "demo": "tsx src/server.ts --demo",
+    "doctor": "python3 scripts/doctor.py",
     "build": "tsc",
     "start": "node dist/server.js",
-    "test": "tsx --test tests/*.test.ts"
+    "test": "tsx --test tests/*.test.ts && python3 -m unittest discover -s tests -p '*_test.py'"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

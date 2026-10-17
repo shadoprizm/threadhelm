@@ -140,6 +140,40 @@ export function reviewSummary(messages,git={}){
  };
 }
 
+/**
+ * Separate an agent's completion claim from repository evidence observed by
+ * the control panel. This is intentionally conservative: a clean or synced
+ * branch is not proof that work was merged, deployed, or made public.
+ */
+export function completionReceipt(messages,git={}){
+ const summary=reviewSummary(messages,git),
+  final=compactConversation(messages).findLast(message=>message.role==='assistant'&&message.text&&message.phase==='final_answer')||null,
+  changed=!!(git.status||git.diffStat||git.stagedStat),
+  head=git.head?String(git.head).slice(0,8):'',
+  ahead=Number.isFinite(Number(git.ahead))?Number(git.ahead):null,
+  behind=Number.isFinite(Number(git.behind))?Number(git.behind):null;
+ let sourceControl='Not available',state='unknown';
+ if(git.available!==false){
+  if(changed){sourceControl='Uncommitted changes remain';state='needs-work';}
+  else if(!git.upstream){sourceControl=head?`Commit ${head}; upstream not configured`:'Upstream not configured';state='review';}
+  else if((behind||0)>0&&(ahead||0)>0){sourceControl=`Diverged: ${ahead} ahead and ${behind} behind ${git.upstream}`;state='needs-work';}
+  else if((behind||0)>0){sourceControl=`${behind} commit${behind===1?'':'s'} behind ${git.upstream}`;state='needs-work';}
+  else if((ahead||0)>0){sourceControl=`${ahead} local commit${ahead===1?'':'s'} ahead of ${git.upstream}`;state='review';}
+  else {sourceControl=`Matches last-fetched ${git.upstream} ref`;state='review';}
+ }
+ return {
+  ...summary,
+  final,
+  state,
+  outcome:final?'Agent report received':'No final report yet',
+  outcomeDetail:final?'The agent supplied a final response; review the evidence before accepting it.':'The current turn has not produced a final response.',
+  workingTree:git.available===false?'Repository evidence unavailable':changed?`${summary.changedFiles} uncommitted change${summary.changedFiles===1?'':'s'}`:'Clean working tree',
+  sourceControl,
+  verification:verificationLine(final?.text||'')||'No verification result was reported in a final response.',
+  release:'Merge and deployment not verified'
+ };
+}
+
 function signalText(value){
  return String(value??'').replace(/```[\s\S]*?```/g,'').replace(/`[^`]+`/g,'').replace(/\[([^\]]+)\]\([^)]+\)/g,'$1').replace(/[*_#>]/g,'').trim();
 }

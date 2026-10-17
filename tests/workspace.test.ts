@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {checkoutAssessment,filterInboxGroups,groupInboxActions,projectsForHost,uiStateFingerprint,workContext,workspaceTasks} from '../public/workspace.js';
+import {checkoutAssessment,filterInboxGroups,groupInboxActions,newAttentionActions,projectsForHost,uiStateFingerprint,workContext,workspaceTasks} from '../public/workspace.js';
 
 test('running workspace total includes unwatched active tasks',()=>{
  const tasks=[
@@ -78,6 +78,18 @@ test('completion noise is grouped by task while live decisions remain individual
  const expired=groups.find(group=>group.latest.id==='a3');assert.deepEqual(expired.resolvableIds,['a3']);
  assert.equal(filterInboxGroups(groups,{type:'decisions'}).length,3);
  assert.equal(filterInboxGroups(groups,{query:'One'}).length,2);
+});
+
+test('operator notifications include only newly actionable inbox records',()=>{
+ const previous=[{id:'old',kind:'approval',status:'open'}];
+ const current=[
+  ...previous,
+  {id:'noise',kind:'status',status:'open',created_at:10},
+  {id:'resolved',kind:'failure',status:'resolved',created_at:20},
+  {id:'complete',kind:'completion',status:'open',created_at:30},
+  {id:'decision',kind:'approval',status:'open',created_at:40}
+ ];
+ assert.deepEqual(newAttentionActions(previous,current).map(action=>action.id),['complete','decision']);
 });
 
 test('checkout assessment flags an active shared checkout',()=>{
