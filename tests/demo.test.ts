@@ -29,7 +29,7 @@ test('demo workspace is synthetic, useful, and disconnected from real integratio
 
 test('demo selection and mutation guard are explicit',()=>{
  assert.equal(demoRequested(['node','server','--demo'],{}),true);assert.equal(demoRequested(['node','server'],{THREADHELM_DEMO:'1'}),true);assert.equal(demoRequested(['node','server'],{ASTRA_DEMO:'1'}),true);assert.equal(demoRequested(['node','server'],{}),false);
- for(const path of ['/api/approval','/api/send','/api/pause','/api/archive','/api/create','/api/chat','/api/hosts/refresh','/api/shadow-analysis/run'])assert.equal(demoRejectsMutation(path),true,path);
+ for(const path of ['/api/approval','/api/approval/expired-decision','/api/send','/api/continue','/api/pause','/api/archive','/api/create','/api/chat','/api/hosts/refresh','/api/shadow-analysis/run','/api/briefing/apply'])assert.equal(demoRejectsMutation(path),true,path);
  for(const path of ['/api/refresh','/api/watch','/api/actions/resolve','/api/actions/resolve-many'])assert.equal(demoRejectsMutation(path),false,path);
  const pkg=JSON.parse(readFileSync(new URL('../package.json',import.meta.url),'utf8'));assert.equal(pkg.scripts.demo,'tsx src/server.ts --demo');
 });

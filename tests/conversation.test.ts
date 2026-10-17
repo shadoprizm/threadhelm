@@ -29,6 +29,12 @@ test('live approval questions are the clearest and highest-priority signal',()=>
  assert.deepEqual({kind:signal.kind,title:signal.title,actionId:signal.actionId},{kind:'question',title:'The agent is waiting for your answer',actionId:'a1'});
 });
 
+test('interrupted work gives the owner a choice instead of a blank status',()=>{
+ const signal=conversationSignal(task('waiting'),[{id:'b1',task_key:'local:task-1',kind:'blocked',status:'open',title:'Task was interrupted',body:'The task stopped.'}]);
+ assert.deepEqual({kind:signal.kind,label:signal.label,title:signal.title,focusComposer:signal.focusComposer},{kind:'action',label:'Your choice',title:'Task was interrupted',focusComposer:true});
+ assert.match(signal.body,/give the agent a clear next instruction or leave it stopped/i);
+});
+
 test('rich conversation formatting is readable and escapes unsafe markup',()=>{
  const html=renderRichText('# Result\n\n- **Done**\n- [Docs](https://example.com)\n\n<script>alert(1)</script>');
  assert.match(html,/<h2[^>]*>Result<\/h2>/);

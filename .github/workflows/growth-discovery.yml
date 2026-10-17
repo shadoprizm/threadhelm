@@ -12,7 +12,6 @@ on:
 
 permissions:
   contents: read
-  issues: write
 
 concurrency:
   group: growth-discovery
@@ -21,31 +20,47 @@ concurrency:
 jobs:
   discover:
     runs-on: ubuntu-latest
+    outputs:
+      campaign_state: ${{ steps.campaign.outputs.state }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.12'
+      - name: Read campaign state
+        id: campaign
+        run: echo "state=$(python3 -c 'import json; print(json.load(open(\"growth/config.json\"))[\"campaign_state\"])')" >> "$GITHUB_OUTPUT"
       - name: Discover adjacent public projects
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           python3 scripts/growth.py discover > growth-discovery.md
           cat growth-discovery.md >> "$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ethical-growth-discovery
           path: growth-discovery.md
           retention-days: 30
           overwrite: true
+      - name: Confirm no-contact boundary
+        run: |
+          echo 'Discovery is complete. No issue, pull request, direct message, email, form, or community submission was sent to any discovered project.'
+
+  issue:
+    needs: discover
+    if: github.event_name == 'workflow_dispatch' && inputs.create_issue && needs.discover.outputs.campaign_state == 'active'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ethical-growth-discovery
       - name: Create a review issue only after manual dispatch approval
-        if: github.event_name == 'workflow_dispatch' && inputs.create_issue
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
           gh label create growth-research --color d4c5f9 --description "Public-project research; never an automated outreach list" --force
           gh issue create --title "[Growth research] Adjacent projects $(date -u +%F)" --label growth-research --body-file growth-discovery.md
-      - name: Confirm no-contact boundary
-        run: |
-          echo 'Discovery is complete. No issue, pull request, direct message, email, form, or community submission was sent to any discovered project.'

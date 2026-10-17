@@ -28,7 +28,7 @@ export function demoRequested(argv:string[]=process.argv,env:NodeJS.ProcessEnv=p
 
 export function demoConfig(port=4318):Config{return {port,hosts:[],mode:'demo'};}
 
-export function demoRejectsMutation(path:string){return new Set(['/api/approval','/api/send','/api/pause','/api/archive','/api/create','/api/chat','/api/hosts/refresh','/api/shadow-analysis/run']).has(path);}
+export function demoRejectsMutation(path:string){return new Set(['/api/approval','/api/approval/expired-decision','/api/send','/api/continue','/api/pause','/api/archive','/api/create','/api/chat','/api/hosts/refresh','/api/shadow-analysis/run','/api/briefing/apply']).has(path);}
 
 function message(id:string,role:string,text:string,minutesAgo:number,phase?:string,extra:Partial<Message>={}):Message{return {id,role,text,at:Date.now()-minutesAgo*60000,...(phase?{phase}:{}),...extra};}
 

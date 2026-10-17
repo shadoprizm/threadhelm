@@ -184,26 +184,26 @@ const currentCopy = (item: WorkItem) => {
 const nextCopy = (item: WorkItem, action?: InboxAction) => {
   if (action?.kind === "approval")
     return {
-      title: "Answer the open decision",
-      body: "Review the request and its evidence before choosing an offered response.",
+      title: "Waiting for your decision",
+      body: "The task is paused until you choose an offered response. Afterward, watch for its next update.",
       priority: 98,
     };
   if (action?.kind === "blocked")
     return {
-      title: "Resolve the blocker",
-      body: "Open the work, identify the missing input, and decide whether it should continue.",
+      title: "Waiting for the missing input",
+      body: "The task cannot continue until the input requested above is available. After that, watch for its next update.",
       priority: 86,
     };
   if (item.status === "failed")
     return {
-      title: "Inspect before retrying",
-      body: "Review the failure and current source state before sending another instruction.",
+      title: "Waiting for failure review",
+      body: "No safe retry is expected until the failure and current source state have been reviewed.",
       priority: 90,
     };
   if (item.status === "waiting")
     return {
-      title: "Review what stopped progress",
-      body: "Confirm the task still matches its objective, then provide the missing decision or input.",
+      title: "Waiting for input",
+      body: "The source reports that progress is paused. Its next checkpoint is an update after the missing input arrives.",
       priority: 82,
     };
   if (item.status === "active" || item.status === "recent")
@@ -216,8 +216,8 @@ const nextCopy = (item: WorkItem, action?: InboxAction) => {
     };
   if (item.status === "completed")
     return {
-      title: "Review the result",
-      body: "Check the reported result and repository evidence before deciding what follows.",
+      title: "Result ready for review",
+      body: "The reported result is available. Check its evidence before deciding what follows.",
       priority: item.watched ? 58 : 34,
     };
   if (item.status === "offline")
@@ -243,15 +243,15 @@ const deterministicRecommendation = (
     body = "No urgent change is supported by the current evidence.",
     priority = item.watched ? 38 : 18;
   if (action?.kind === "approval") {
-    rule = "review-decision";
-    title = "Review the pending decision";
-    body = clean(action.body, 300) || "A live decision is waiting for you.";
-    priority = 100;
+    rule = "await-owner-decision";
+    title = "No recommendation until you decide";
+    body = "This choice belongs to you. Astra does not recommend an outcome from the current evidence.";
+    priority = 30;
   } else if (action?.kind === "blocked" || item.status === "waiting") {
-    rule = "resolve-blocker";
-    title = "Resolve the blocker before continuing";
-    body = clean(action?.body || item.latestExcerpt, 300) || "This work cannot make progress without attention.";
-    priority = 88;
+    rule = "await-missing-input";
+    title = "No additional recommendation";
+    body = "The work needs the requested input before Astra can recommend a safe change.";
+    priority = 30;
   } else if (item.status === "failed" || action?.kind === "failure") {
     rule = "inspect-failure";
     title = "Inspect the failure before retrying";
@@ -285,6 +285,7 @@ const deterministicRecommendation = (
     evidenceRevision: revision,
     evidence: lines,
     source: "deterministic",
+    isAdvice: !["await-owner-decision", "await-missing-input"].includes(rule),
     confidence: item.statusConfidence,
     updatedAt: Math.max(item.updatedAt, action?.updated_at || 0),
     priority,
@@ -311,6 +312,7 @@ const proposalRecommendation = (
     ],
     source: "model",
     analysisMode: "coordinator",
+    isAdvice: true,
     confidence: item?.statusConfidence || "heuristic",
     updatedAt: proposal.updated_at || proposal.created_at,
     priority: item ? 86 : 70,
@@ -319,11 +321,13 @@ const proposalRecommendation = (
 const shadowRecommendation = (
   analysis: ShadowAnalysis,
   item: WorkItem,
+  action?: InboxAction,
 ): BriefingEntry => ({
   id: analysis.id,
   kind: "recommendation",
   taskKey: item.key,
   workTitle: item.title,
+  ...(action && analysis.category === "resolve-decision" ? { actionId: action.id } : {}),
   title: clean(analysis.title, 240) || "AI shadow recommendation",
   body:
     clean(analysis.recommendation, 700) ||
@@ -340,6 +344,7 @@ const shadowRecommendation = (
   ],
   source: "model",
   analysisMode: "shadow",
+  isAdvice: true,
   confidence: item.statusConfidence,
   updatedAt: analysis.updated_at || analysis.created_at,
   priority: ["failed", "waiting"].includes(item.status) ? 94 : 76,
@@ -382,7 +387,7 @@ export function buildTaskBriefing(
       )
       .sort((a, b) => b.created_at - a.created_at)[0],
     recommendation = shadow
-      ? shadowRecommendation(shadow, item)
+      ? shadowRecommendation(shadow, item, decisionAction)
       : model
         ? proposalRecommendation(model, item)
         : deterministicRecommendation(item, relevant[0], revision, lines);
@@ -508,7 +513,13 @@ export function buildWorkspaceBriefing(
       brief.decision ? [brief.decision] : [],
     ),
     recommendations = [
-      ...briefs.map((brief) => brief.recommendation),
+      ...briefs
+        .filter(
+          (brief) =>
+            brief.recommendation.source === "model" &&
+            brief.recommendation.isAdvice !== false,
+        )
+        .map((brief) => brief.recommendation),
       ...globalProposals,
     ],
     nextSteps = briefs

@@ -273,6 +273,16 @@ export class Store {
         CREATE INDEX IF NOT EXISTS shadow_analyses_daily_idx ON shadow_analyses(created_at,status);
       `);
     });
+    this.applyMigration(7, () => {
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS applied_recommendations(
+          recommendation_id TEXT NOT NULL,
+          evidence_revision TEXT NOT NULL,
+          applied_at INTEGER NOT NULL,
+          PRIMARY KEY(recommendation_id,evidence_revision)
+        );
+      `);
+    });
   }
   private captureDecisionBaseline() {
     const key = "baseline.release0.decision.v1";
@@ -356,6 +366,11 @@ export class Store {
     )
       return undefined;
     return { ...row, action: parse(row.action, null) };
+  }
+  setCoordinatorProposalStatus(id: string, status: "executed" | "stale") {
+    this.db
+      .prepare("UPDATE coordinator_proposals SET status=?,updated_at=? WHERE id=?")
+      .run(status, Date.now(), id);
   }
   staleCoordinatorProposalsExcept(evidenceRevision: string) {
     this.db
@@ -504,6 +519,32 @@ export class Store {
       .prepare("SELECT * FROM shadow_analyses ORDER BY created_at DESC LIMIT ?")
       .all(Math.max(1, Math.min(5000, limit))) as any[];
   }
+  unappliedShadowAnalyses(limit = 1000) {
+    return this.db
+      .prepare(
+        `SELECT analysis.* FROM shadow_analyses analysis
+         WHERE NOT EXISTS(
+           SELECT 1 FROM applied_recommendations applied
+           WHERE applied.recommendation_id=analysis.id
+           AND applied.evidence_revision=analysis.evidence_revision
+         ) ORDER BY analysis.created_at DESC LIMIT ?`,
+      )
+      .all(Math.max(1, Math.min(5000, limit))) as any[];
+  }
+  shadowAnalysisApplied(id: string, evidenceRevision: string) {
+    return !!this.db
+      .prepare(
+        "SELECT 1 FROM applied_recommendations WHERE recommendation_id=? AND evidence_revision=?",
+      )
+      .get(id, evidenceRevision);
+  }
+  applyShadowAnalysis(id: string, evidenceRevision: string) {
+    this.db
+      .prepare(
+        "INSERT OR IGNORE INTO applied_recommendations(recommendation_id,evidence_revision,applied_at) VALUES(?,?,?)",
+      )
+      .run(id, evidenceRevision, Date.now());
+  }
   shadowMetrics(now = Date.now()) {
     const date = new Date(now),
       day = Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()),
@@ -558,7 +599,7 @@ export class Store {
   openActions(limit = 1000) {
     return this.db
       .prepare(
-        "SELECT * FROM actions WHERE status<>'resolved' ORDER BY created_at DESC LIMIT ?",
+        "SELECT * FROM actions WHERE status NOT IN ('resolved','reissued','approved','declined') ORDER BY created_at DESC LIMIT ?",
       )
       .all(Math.max(1, Math.min(5000, limit)))
       .map(storedAction);

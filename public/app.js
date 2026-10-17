@@ -4,6 +4,7 @@ import {
   groupInboxActions,
   projectsForHost,
   uiStateFingerprint,
+  workContext,
   workspaceTasks,
 } from "./workspace.js";
 import {
@@ -112,6 +113,23 @@ const repo = (t) => {
   const p = t.cwd.split("/");
   return p.at(-1) === "project" ? p.at(-2) : p.at(-1);
 };
+const contextFor = (t) => workContext(t, state.projects || []);
+const contextSummary = (t) => {
+  const context = contextFor(t),
+    project = context.projectName
+      ? `Project: ${context.projectName}`
+      : "Project: Not linked",
+    repository = context.repository
+      ? `Repository: ${context.repository}`
+      : "Repository: Not available";
+  return `${context.kind} · ${project} · ${repository}`;
+};
+const contextHtml = (t, className = "") => {
+  const context = contextFor(t),
+    project = context.projectName || "Not linked",
+    repository = context.repository || "Not available";
+  return `<div class="work-context ${className}" aria-label="${esc(contextSummary(t))}"><span class="work-context-kind">${esc(context.kind)}</span><span><b>Project</b> ${esc(project)}</span><span${context.repositoryPath ? ` title="${esc(context.repositoryPath)}"` : ""}><b>Repository</b> ${esc(repository)}</span></div>`;
+};
 const sourceName = (t) => {
   const names = {
     codex: "Codex",
@@ -124,6 +142,22 @@ const sourceName = (t) => {
   return refs.length > 1
     ? `${names[refs[0].adapter] || refs[0].adapter} +${refs.length - 1}`
     : names[refs[0]?.adapter] || "Unknown";
+};
+const approvalSubject = (payload) => {
+  switch (payload?.method) {
+    case "item/permissions/requestApproval":
+      return "access";
+    case "item/commandExecution/requestApproval":
+      return "command";
+    case "item/fileChange/requestApproval":
+      return "file change";
+    default:
+      return "request";
+  }
+};
+const approvalContextHtml = (payload) => {
+  const subject = approvalSubject(payload);
+  return `<section class="approval-context"><div class="eyebrow">NO ASTRA RECOMMENDATION ATTACHED</div><strong>This is an authorization request, not advice.</strong><p>You are deciding only whether the agent may make the exact ${esc(subject)} shown below. If it later needs broader access or another action, it must request a new approval.</p></section>`;
 };
 const title = (t) => t?.title || "Task";
 const shortTitle = (t) =>
@@ -158,7 +192,25 @@ async function api(path, body) {
       : {},
     ...(body ? { body: JSON.stringify(body) } : {}),
   });
-  const d = await r.json();
+  const contentType = r.headers.get("content-type") || "";
+  const responseText = await r.text();
+  let d;
+  if (!/\bapplication\/json\b/i.test(contentType)) {
+    if (r.redirected || /^\s*</.test(responseText))
+      throw new Error(
+        "Your secure dashboard session expired. Reload this page and sign in again, then retry the action.",
+      );
+    throw new Error(
+      "The dashboard returned an unexpected response. Reload the page and try again.",
+    );
+  }
+  try {
+    d = JSON.parse(responseText || "{}");
+  } catch {
+    throw new Error(
+      "The dashboard returned invalid data. Reload the page and try again.",
+    );
+  }
   if (!r.ok) {
     if (storageKey && d.error && !/timed out|connection closed/i.test(d.error))
       sessionStorage.removeItem(storageKey);
@@ -235,7 +287,7 @@ function renderIfChanged() {
   return true;
 }
 function briefingFeedbackHtml(entry) {
-  if (entry.kind !== "recommendation") return "";
+  if (entry.kind !== "recommendation" || entry.source !== "model") return "";
   return `<div class="briefing-feedback" aria-label="Rate this recommendation"><span>Was this useful?</span>${[
     ["useful", "Useful"],
     ["wrong", "Wrong"],
@@ -247,22 +299,135 @@ function briefingFeedbackHtml(entry) {
     )
     .join("")}</div>`;
 }
+function briefingEvidenceValue(entry, label) {
+  const prefix = `${label}:`;
+  const line = (entry.evidence || []).find((value) =>
+    String(value).startsWith(prefix),
+  );
+  return line ? String(line).slice(prefix.length).trim() : "";
+}
+function briefingAction(entry) {
+  const task = [...state.tasks, ...(state.inboxItems || [])].find(
+      (item) => item.key === entry.taskKey,
+    ),
+    external = task?.sourceRefs?.find(
+      (source) => source.adapter !== "codex" && source.deepLink,
+    );
+  if (entry.actionId && external)
+    return {
+      label: `Open ${sourceName(task)} to decide`,
+      outcome: "This source owns the task, so its exact decision must be completed there.",
+      href: external.deepLink,
+    };
+  if (entry.actionId)
+    return {
+      label:
+        entry.kind === "next"
+          ? "Make the required decision"
+          : "Make this decision",
+      outcome:
+        entry.kind === "next"
+          ? "Open the exact choice that is blocking this next step."
+          : "Open the exact request and submit one of its available choices.",
+      attributes: `data-action="${esc(entry.actionId)}"`,
+    };
+  if (entry.kind === "recommendation" && entry.source === "model") {
+    if (external)
+      return {
+        label: `Open ${sourceName(task)} to act`,
+        outcome: "This source owns the task, so its action must be completed there.",
+        href: external.deepLink,
+      };
+    if (
+      task?.sourceRefs?.some((source) => source.adapter === "codex") &&
+      (task.controlAvailable === false || (task.owned && !task.managed))
+    )
+      return {
+        label: "Open in Codex to run this",
+        outcome: "Codex desktop owns this task, so the recommendation must run there.",
+        href: `codex://threads/${encodeURIComponent(task.id)}`,
+      };
+    const category = briefingEvidenceValue(entry, "Category").toLowerCase(),
+      actions = {
+        continue: [
+          "Continue safely",
+          "Tell Astra to continue from its last safe checkpoint. It will ask again before any new approval is needed.",
+        ],
+        inspect: [
+          "Ask Astra to inspect this",
+          "Tell Astra to examine the interruption and report the safest next action without resuming implementation.",
+        ],
+        "resolve-decision": [
+          "Ask Astra to identify the decision",
+          "Tell Astra to return the one specific question it needs answered before continuing.",
+        ],
+        wait: [
+          "Watch for an update",
+          "Start monitoring this work and surface the next meaningful change here.",
+        ],
+        watch: [
+          "Watch this work",
+          "Start monitoring this work and surface the next meaningful change here.",
+        ],
+        keep: [
+          "Keep watching",
+          "Keep this work visible and surface the next meaningful change here.",
+        ],
+        "archive-candidate": [
+          "Archive this task",
+          "Archive this inactive task. It remains recoverable in Codex.",
+        ],
+        "move-model-candidate": [
+          "Prepare a model-change plan",
+          "Tell Astra to prepare the exact model-change plan without changing the task yet.",
+        ],
+      },
+      [label, outcome] = actions[category] || [
+        "Apply this recommendation",
+        "Run Astra’s constrained next action for this recommendation.",
+      ];
+    return {
+      label,
+      outcome,
+      attributes: `data-apply-recommendation="${esc(entry.id)}" data-revision="${esc(entry.evidenceRevision)}"${entry.taskKey ? ` data-briefing-task="${esc(entry.taskKey)}"` : ""}`,
+    };
+  }
+  if (entry.kind === "current")
+    return {
+      label: "Check latest status",
+      outcome: "Refresh the source and show whether this work is still moving.",
+      attributes: "data-briefing-refresh",
+    };
+  if (entry.kind === "next" && entry.taskKey)
+    return {
+      label: "Watch for this update",
+      outcome: "Keep this work visible and surface the next meaningful change here.",
+      attributes: `data-briefing-watch="${esc(entry.taskKey)}"`,
+    };
+  return {
+    label: "Check latest status",
+    outcome: "Refresh the source before deciding what to do next.",
+    attributes: "data-briefing-refresh",
+  };
+}
+function briefingActionHtml(entry) {
+  const action = briefingAction(entry);
+  return `<div class="briefing-next-move"><span>CLICKING THIS WILL</span><p>${esc(action.outcome)}</p>${action.href ? `<a class="briefing-execute" href="${esc(action.href)}">${esc(action.label)} →</a>` : `<button class="briefing-execute" ${action.attributes}>${esc(action.label)} →</button>`}</div>`;
+}
 function briefingEntryHtml(entry) {
   const source =
       entry.analysisMode === "shadow"
-        ? "AI shadow"
+        ? "Astra analysis"
         : entry.source === "model"
-          ? "AI proposal"
-          : "Evidence brief",
-    subject = entry.workTitle || "Workspace",
-    primary = entry.actionId
-      ? `<button class="briefing-open" data-action="${esc(entry.actionId)}">${entry.kind === "decision" ? "Review decision" : "Review item"} →</button>`
-      : entry.taskKey
-        ? `<button class="briefing-open" data-task="${esc(entry.taskKey)}">Open evidence →</button>`
-        : "",
+        ? "Astra proposal"
+          : "System guidance",
+    task = [...state.tasks, ...(state.inboxItems || [])].find(
+      (item) => item.key === entry.taskKey,
+    ),
+    subject = entry.workTitle || task?.title || "Workspace",
     expanded = expandedBriefingEvidence.has(entry.id);
   const evidenceLabel = `Evidence ${entry.evidenceRevision.slice(0, 8)}`;
-  return `<article class="briefing-item ${esc(entry.source)}"><div class="briefing-kicker"><span>${esc(source)}</span><span>${ago(entry.updatedAt)}</span></div><strong>${esc(subject)}</strong><h4>${esc(entry.title)}</h4><p>${esc(entry.body)}</p><div class="briefing-item-actions">${primary}<button class="briefing-evidence" data-show-evidence="${esc(entry.id)}" data-evidence-label="${esc(evidenceLabel)}" aria-expanded="${expanded}" aria-label="${expanded ? "Hide" : "Show"} evidence for ${esc(entry.title)}">${expanded ? "Hide evidence" : esc(evidenceLabel)}</button></div>${briefingFeedbackHtml(entry)}<div class="briefing-evidence-lines" data-evidence-for="${esc(entry.id)}" ${expanded ? "" : "hidden"}>${(entry.evidence || []).map((line) => `<span>${esc(line)}</span>`).join("")}</div></article>`;
+  return `<article class="briefing-item ${esc(entry.source)}"><div class="briefing-kicker"><span>${esc(source)}</span><span>${ago(entry.updatedAt)}</span></div><strong>${esc(subject)}</strong>${task ? contextHtml(task, "briefing-work-context") : ""}<h4>${esc(entry.title)}</h4><p>${esc(entry.body)}</p>${briefingActionHtml(entry)}<div class="briefing-item-actions"><button class="briefing-evidence" data-show-evidence="${esc(entry.id)}" data-evidence-label="${esc(evidenceLabel)}" aria-expanded="${expanded}" aria-label="${expanded ? "Hide" : "Show"} evidence for ${esc(entry.title)}">${expanded ? "Hide evidence" : esc(evidenceLabel)}</button></div>${briefingFeedbackHtml(entry)}<div class="briefing-evidence-lines" data-evidence-for="${esc(entry.id)}" ${expanded ? "" : "hidden"}>${(entry.evidence || []).map((line) => `<span>${esc(line)}</span>`).join("")}</div></article>`;
 }
 function briefingColumnHtml(section, empty) {
   return section?.items?.length
@@ -294,11 +459,12 @@ function renderBriefing() {
 function taskBriefCardHtml(task) {
   const briefing = task.briefing;
   if (!briefing) return "";
-  const supervisor = state.supervisorName || "Astra",
+  const recommendationLabel =
+      briefing.recommendation?.source === "model" ? "Astra" : "Guidance",
     rows = [
       ["Now", briefing.current?.title],
       ["You", briefing.decision?.title || "No decision pending"],
-      [supervisor, briefing.recommendation?.title],
+      [recommendationLabel, briefing.recommendation?.title],
       ["Next", briefing.next?.title],
     ];
   return `<button class="task-brief" data-task="${esc(task.key)}" aria-label="Open evidence briefing for ${esc(shortTitle(task))}">${rows.map(([label, value]) => `<span><b>${label}</b><em>${esc(value || "Not available")}</em></span>`).join("")}</button>`;
@@ -309,10 +475,15 @@ function taskBriefDetailHtml(task) {
   const entries = [
     ["Now", briefing.current],
     ["Your decision", briefing.decision],
-    ["Recommendation", briefing.recommendation],
+    [
+      briefing.recommendation?.source === "model"
+        ? "Astra’s recommendation"
+        : "System next step",
+      briefing.recommendation,
+    ],
     ["Next", briefing.next],
   ];
-  return `<section class="task-brief-detail"><div class="task-brief-detail-heading"><div><div class="eyebrow">EVIDENCE BRIEF</div><h3>What is happening and what follows</h3></div><small>${esc(briefing.evidenceRevision.slice(0, 10))}</small></div><div class="task-brief-detail-grid">${entries.map(([label, entry]) => `<article class="${entry ? "" : "empty-entry"}"><span>${esc(label)}</span><strong>${esc(entry?.title || "Nothing pending")}</strong><p>${esc(entry?.body || "No owner decision is required by the current evidence.")}</p>${entry?.kind === "recommendation" ? briefingFeedbackHtml(entry) : ""}</article>`).join("")}</div></section>`;
+  return `<section class="task-brief-detail"><div class="task-brief-detail-heading"><div><div class="eyebrow">EVIDENCE BRIEF</div><h3>Choose or run the next move</h3></div><small>${esc(briefing.evidenceRevision.slice(0, 10))}</small></div><div class="task-brief-detail-grid">${entries.map(([label, entry]) => `<article class="${entry ? "" : "empty-entry"}"><span>${esc(label)}</span><strong>${esc(entry?.title || "Nothing pending")}</strong><p>${esc(entry?.body || "No owner decision is required by the current evidence.")}</p>${entry ? briefingActionHtml(entry) : ""}${label === "System next step" ? '<small class="briefing-origin">Status guidance, not an Astra-proposed solution.</small>' : ""}${entry?.kind === "recommendation" ? briefingFeedbackHtml(entry) : ""}</article>`).join("")}</div></section>`;
 }
 async function refresh() {
   try {
@@ -445,7 +616,7 @@ function render() {
   );
   if (search)
     tasks = tasks.filter((t) =>
-      (t.title + " " + t.cwd + " " + hostName(t.hostId) + " " + sourceName(t))
+      (t.title + " " + t.cwd + " " + hostName(t.hostId) + " " + sourceName(t) + " " + contextSummary(t))
         .toLowerCase()
         .includes(search),
     );
@@ -455,7 +626,7 @@ function render() {
     ? tasks
         .map(
           (t) =>
-            `<article class="task-card"><div class="task-card-top"><span class="source-badge source-${esc(t.sourceRefs?.[0]?.adapter || "unknown")}">${esc(sourceName(t))}</span><span class="badge ${taskStatus(t)}">${esc(taskStatus(t) === "recent" ? "Recently active" : taskStatus(t) === "offline" ? "Stale / offline" : taskStatus(t))}</span></div><button class="task-open" data-task="${esc(t.key)}"><h3>${esc(shortTitle(t))}</h3><p>${esc(plainPreview(t.latestExcerpt || t.latest?.text) || "Open this item to see its recent conversation.")}</p></button>${taskBriefCardHtml(t)}<div class="execution-meta"><span>${esc(t.sourceRefs?.[0]?.profile || t.sourceRefs?.[0]?.agent || t.kind)}</span><span>${esc(t.execution?.host || hostName(t.hostId))}</span>${t.execution?.requestedModel ? `<span title="Requested model">${esc(t.execution.requestedModel)}</span>` : ""}${t.execution?.resolvedModel && t.execution.resolvedModel !== t.execution.requestedModel ? `<span title="Resolved model">→ ${esc(t.execution.resolvedModel)}</span>` : ""}<span>${esc(t.execution?.locality || "unknown")} inference</span><span>${esc(t.statusConfidence || "authoritative")}</span></div><div class="task-meta"><span>${ago(t.updatedAt)}${t.managed ? " · Managed" : ""}</span><button class="watch ${t.watched ? "on" : ""}" data-watch="${esc(t.key)}">${t.watched ? "◉ Watching" : "＋ Watch"}</button></div></article>`,
+            `<article class="task-card"><div class="task-card-top"><span class="source-badge source-${esc(t.sourceRefs?.[0]?.adapter || "unknown")}">${esc(sourceName(t))}</span><span class="badge ${taskStatus(t)}">${esc(taskStatus(t) === "recent" ? "Recently active" : taskStatus(t) === "offline" ? "Stale / offline" : taskStatus(t))}</span></div><button class="task-open" data-task="${esc(t.key)}">${contextHtml(t, "task-work-context")}<h3>${esc(shortTitle(t))}</h3><p>${esc(plainPreview(t.latestExcerpt || t.latest?.text) || "Open this item to see its recent conversation.")}</p></button>${taskBriefCardHtml(t)}<div class="execution-meta"><span>${esc(t.sourceRefs?.[0]?.profile || t.sourceRefs?.[0]?.agent || t.kind)}</span><span>${esc(t.execution?.host || hostName(t.hostId))}</span>${t.execution?.requestedModel ? `<span title="Requested model">${esc(t.execution.requestedModel)}</span>` : ""}${t.execution?.resolvedModel && t.execution.resolvedModel !== t.execution.requestedModel ? `<span title="Resolved model">→ ${esc(t.execution.resolvedModel)}</span>` : ""}<span>${esc(t.execution?.locality || "unknown")} inference</span><span>${esc(t.statusConfidence || "authoritative")}</span></div><div class="task-meta"><span>${ago(t.updatedAt)}${t.managed ? " · Managed" : ""}</span><button class="watch ${t.watched ? "on" : ""}" data-watch="${esc(t.key)}">${t.watched ? "◉ Watching" : "＋ Watch"}</button></div></article>`,
         )
         .join("")
     : `<div class="empty"><strong>${filter === "watched" ? "Choose your working set." : "No matching work."}</strong>${filter === "watched" ? "Watch agent work you want surfaced in the Action Inbox." : "Try another filter or search."}${filter === "watched" ? '<button class="secondary" data-show-all>Browse recent work →</button>' : ""}</div>`;
@@ -532,7 +703,7 @@ function attentionCard(group) {
       group.count > 1
         ? `<span class="group-count">${group.count} updates</span>`
         : "";
-  return `<button class="attention-card" data-action="${esc(a.id)}"><span class="attention-icon">${groupIcon(group.category)}</span><div><strong>${esc(a.title)} ${count}</strong><p>${esc(t ? repo(t) + " · " + shortTitle(t) : a.body)}</p></div><span class="arrow">↗</span></button>`;
+  return `<button class="attention-card" data-action="${esc(a.id)}"><span class="attention-icon">${groupIcon(group.category)}</span><div><strong>${esc(a.title)} ${count}</strong><p>${esc(t ? contextSummary(t) + " · " + shortTitle(t) : a.body)}</p></div><span class="arrow">↗</span></button>`;
 }
 function renderInbox(groups) {
   const filtered = filterInboxGroups(groups, {
@@ -584,7 +755,7 @@ function inboxGroupHtml(group) {
         : group.category === "issues"
           ? "Issue"
           : "Completed";
-  return `<article class="inbox-group ${esc(group.category)}">${group.resolvableIds.length ? `<label class="select-action"><input type="checkbox" data-select-group="${esc(group.key)}" ${checked ? "checked" : ""}><span class="sr-only">Select ${esc(a.title)}</span></label>` : '<span class="select-spacer"></span>'}<span class="attention-icon">${groupIcon(group.category)}</span><button class="inbox-open" data-action="${esc(a.id)}"><span class="inbox-kicker">${category} · ${esc(t ? hostName(t.hostId) : "Workspace")} · ${ago(group.createdAt)}</span><strong>${esc(a.title)} ${count}</strong><p>${esc(t ? repo(t) + " · " + shortTitle(t) : a.body)}</p></button><button class="icon-button" data-action="${esc(a.id)}" aria-label="Review ${esc(a.title)}">↗</button></article>`;
+  return `<article class="inbox-group ${esc(group.category)}">${group.resolvableIds.length ? `<label class="select-action"><input type="checkbox" data-select-group="${esc(group.key)}" ${checked ? "checked" : ""}><span class="sr-only">Select ${esc(a.title)}</span></label>` : '<span class="select-spacer"></span>'}<span class="attention-icon">${groupIcon(group.category)}</span><button class="inbox-open" data-action="${esc(a.id)}"><span class="inbox-kicker">${category} · ${esc(t ? hostName(t.hostId) : "Workspace")} · ${ago(group.createdAt)}</span><strong>${esc(a.title)} ${count}</strong><p>${esc(t ? contextSummary(t) + " · " + shortTitle(t) : a.body)}</p></button><button class="icon-button" data-action="${esc(a.id)}" aria-label="Review ${esc(a.title)}">↗</button></article>`;
 }
 function renderActivity() {
   const rows = [
@@ -748,6 +919,22 @@ function signalHtml(signal, t) {
       : "";
   return `<section class="task-signal ${esc(signal.kind)}" role="status" aria-label="${esc(signal.label)}"><span class="signal-icon" aria-hidden="true">${esc(signal.icon)}</span><div class="signal-copy"><div class="signal-label">${esc(signal.label)}</div><strong>${esc(signal.title)}</strong><p>${esc(signal.body)}</p></div>${action}</section>`;
 }
+function continuationChoiceHtml(t, status, controls) {
+  const liveApproval = state.actions.some(
+    (action) =>
+      action.kind === "approval" &&
+      action.status === "open" &&
+      (action.taskKey || action.task_key) === t.key,
+  );
+  if (
+    !controls ||
+    !t.managed ||
+    !["paused", "waiting"].includes(status) ||
+    liveApproval
+  )
+    return "";
+  return `<section class="task-signal next" aria-label="Choose what happens next"><span class="signal-icon" aria-hidden="true">?</span><div class="signal-copy"><div class="signal-label">YOUR CHOICE</div><strong>No AI recommendation is ready to approve yet</strong><p>This task was interrupted before its recommendation checkpoint. Continue resumes from the last safe checkpoint; it does not approve an old request. You can also stop this direction or tell the agent what to do instead.</p></div><div class="actions-row"><button class="primary" data-continue="${esc(t.key)}">Continue task</button><button class="secondary" data-stop="${esc(t.key)}">Don’t continue</button><button class="secondary" data-focus-compose>Give a different direction</button></div></section>`;
+}
 function repositoryHtml(g) {
   if (!g.available)
     return `<details class="technical-details"><summary><span>Repository state</span><small>Unavailable</small></summary><p>${esc(g.error || "No Git repository found.")}</p></details>`;
@@ -815,7 +1002,7 @@ function renderDetail(d, scroll) {
       : !t.managed && t.owned
         ? "Continue in Codex — this task is desktop-owned"
         : "Send to agent →";
-  content.innerHTML = `<div class="task-context"><div><span class="badge ${status}">${esc(status === "idle" ? "Turn complete" : status === "offline" ? "Stale / offline" : status)}</span><span>${esc(hostName(t.hostId))} · ${esc(repo(t))}</span></div><div class="actions-row"><a href="codex://threads/${encodeURIComponent(t.id)}">Open in Codex ↗</a>${controls && t.managed && status === "active" ? `<button class="secondary" data-pause="${esc(t.key)}">Pause turn</button>` : ""}${controls && inactive ? `<button class="secondary" data-archive="${esc(t.key)}">Archive task</button>` : ""}<button class="secondary" data-task="${esc(t.key)}">Refresh</button></div></div>${signalHtml(signal, t)}${!controls ? `<div class="ownership-note warn">${esc(t.controlReason || "Controls are disabled because this Codex protocol has not passed the compatibility probe.")}</div>` : !t.managed ? `<div class="ownership-note ${t.owned ? "warn" : ""}">${t.owned ? "This task is controlled by Codex desktop. Reply there to continue it." : "Sending a reply will bring this available task under dashboard control."}</div>` : ""}${taskBriefDetailHtml(t)}${reviewHtml(messages, g)}<section class="conversation-section"><div class="conversation-heading"><h3>Earlier conversation and activity</h3><span>Technical activity is collapsed</span></div><div class="messages">${conversationHtml(earlier.slice(-30)) || '<div class="empty compact">No earlier conversation items are available.</div>'}</div></section><form class="compose" id="send-form"><label for="send-input">Reply or give the agent its next instruction</label><textarea id="send-input" rows="4" placeholder="Write a clear answer or describe what should happen next…" ${controls ? "" : "disabled"}>${esc(drafts.get(t.key) || "")}</textarea><button class="primary full" type="submit" ${sendDisabled ? "disabled" : ""}>${sendLabel}</button></form>${repositoryHtml(g)}`;
+  content.innerHTML = `<div class="task-context"><div><span class="badge ${status}">${esc(status === "idle" ? "Turn complete" : status === "offline" ? "Stale / offline" : status)}</span><span>${esc(hostName(t.hostId))} · ${esc(repo(t))}</span></div><div class="actions-row"><a href="codex://threads/${encodeURIComponent(t.id)}">Open in Codex ↗</a>${controls && t.managed && status === "active" ? `<button class="secondary" data-pause="${esc(t.key)}">Pause turn</button>` : ""}${controls && inactive ? `<button class="secondary" data-archive="${esc(t.key)}">Archive task</button>` : ""}<button class="secondary" data-task="${esc(t.key)}">Refresh</button></div></div>${signalHtml(signal, t)}${continuationChoiceHtml(t, status, controls)}${!controls ? `<div class="ownership-note warn">${esc(t.controlReason || "Controls are disabled because this Codex protocol has not passed the compatibility probe.")}</div>` : !t.managed ? `<div class="ownership-note ${t.owned ? "warn" : ""}">${t.owned ? "This task is controlled by Codex desktop. Reply there to continue it." : "Sending a reply will bring this available task under dashboard control."}</div>` : ""}${taskBriefDetailHtml(t)}${reviewHtml(messages, g)}<section class="conversation-section"><div class="conversation-heading"><h3>Earlier conversation and activity</h3><span>Technical activity is collapsed</span></div><div class="messages">${conversationHtml(earlier.slice(-30)) || '<div class="empty compact">No earlier conversation items are available.</div>'}</div></section><form class="compose" id="send-form"><label for="send-input">Reply or give the agent its next instruction</label><textarea id="send-input" rows="4" placeholder="Write a clear answer or describe what should happen next…" ${controls ? "" : "disabled"}>${esc(drafts.get(t.key) || "")}</textarea><button class="primary full" type="submit" ${sendDisabled ? "disabled" : ""}>${sendLabel}</button></form>${repositoryHtml(g)}`;
   restorePanelScroll(scroll);
   $("#send-input").addEventListener("input", (e) =>
     drafts.set(t.key, e.target.value),
@@ -911,6 +1098,17 @@ function coordinatorActions(message) {
     })
     .join("");
 }
+function coordinatorUsage(message) {
+  const usage = message.body?.usage;
+  if (!usage) return "";
+  const input = usage.inputTokens ?? usage.estimatedInputTokens,
+    output = usage.outputTokens ?? usage.estimatedOutputTokens,
+    limit = Math.round((usage.maxInputChars || 0) / 4),
+    detail = usage.inputTokens != null ? "reported" : "estimated",
+    tasks = usage.context?.tasks,
+    inbox = usage.context?.inbox;
+  return `<div class="quiet coordinator-usage">Context: ${Number(input || 0).toLocaleString()} ${esc(detail)} input tokens${limit ? ` of ${limit.toLocaleString()} available` : ""} · ${Number(output || 0).toLocaleString()} output tokens${tasks ? ` · ${tasks.included}/${tasks.available} tasks` : ""}${inbox ? ` · ${inbox.included}/${inbox.available} inbox items` : ""}</div>`;
+}
 function renderChat() {
   const live = $("#chat-live"),
     existing = panel === "chat" && !$("#panel").hidden && !!live,
@@ -938,7 +1136,7 @@ function renderChat() {
   const messages = $("#chat-live"),
     input = $("#chat-input"),
     button = $('#chat-form button[type="submit"]');
-  messages.innerHTML = `<div class="messages">${state.chat.length ? state.chat.map((m) => `<article class="message ${m.role === "user" ? "user" : "assistant"}"><div class="message-meta"><span>${m.role === "user" ? "You" : "Coordinator"}${m.body.model ? ` · ${esc(m.body.model)}` : ""}</span></div><div class="rich-text">${renderRichText(m.body.answer)}</div>${coordinatorActions(m)}${(m.body.dispatches || []).map((d) => `<div class="proposal"><small>LEGACY PROPOSAL · ${esc(title(state.tasks.find((t) => t.key === d.taskKey)))}</small><p>${esc(d.prompt)}</p><button class="secondary" data-proposal-key="${esc(d.taskKey)}" data-proposal-prompt="${esc(d.prompt)}">Send instruction →</button></div>`).join("")}</article>`).join("") : '<div class="empty"><strong>Your workspace has an AI coordinator.</strong>Try “Review everything and tell me what needs attention first.”</div>'}</div>${state.chatBusy ? '<div class="loading">Coordinator is reviewing the workspace and preparing recommendations…</div>' : ""}`;
+  messages.innerHTML = `<div class="messages">${state.chat.length ? state.chat.map((m) => `<article class="message ${m.role === "user" ? "user" : "assistant"}"><div class="message-meta"><span>${m.role === "user" ? "You" : "Coordinator"}${m.body.model ? ` · ${esc(m.body.model)}` : ""}</span></div><div class="rich-text">${renderRichText(m.body.answer)}</div>${coordinatorUsage(m)}${coordinatorActions(m)}${(m.body.dispatches || []).map((d) => `<div class="proposal"><small>LEGACY PROPOSAL · ${esc(title(state.tasks.find((t) => t.key === d.taskKey)))}</small><p>${esc(d.prompt)}</p><button class="secondary" data-proposal-key="${esc(d.taskKey)}" data-proposal-prompt="${esc(d.prompt)}">Send instruction →</button></div>`).join("")}</article>`).join("") : '<div class="empty"><strong>Your workspace has an AI coordinator.</strong>Try “Review everything and tell me what needs attention first.”</div>'}</div>${state.chatBusy ? '<div class="loading">Coordinator is reviewing the workspace and preparing recommendations…</div>' : ""}`;
   input.disabled = !!state.chatBusy;
   button.disabled = !!state.chatBusy;
   restorePanelScroll(scroll);
@@ -948,7 +1146,11 @@ async function openAction(id) {
   if (!a) return;
   panel = "action:" + id;
   openPanel(
-    a.kind === "approval" ? "DECISION NEEDED" : "RESULT REVIEW",
+    a.kind === "approval"
+      ? "AUTHORIZATION REQUEST"
+      : a.kind === "blocked"
+        ? "TASK DECISION"
+        : "RESULT REVIEW",
     a.title,
   );
   const t = [...state.tasks, ...(state.inboxItems || [])].find(
@@ -969,8 +1171,22 @@ async function openAction(id) {
 }
 function renderAction(a, t, d, error = "") {
   const p = a.payload,
+    approvalSubjectLabel = approvalSubject(p),
     approvalHost = state.hosts.find((host) => host.id === p?.hostId),
-    approvalControl = !approvalHost || approvalHost.controlAvailable;
+    approvalControl = !approvalHost || approvalHost.controlAvailable,
+    canDecideExpired =
+      a.kind === "approval" &&
+      a.status === "expired" &&
+      !state.demo?.enabled &&
+      approvalControl &&
+      !!t?.managed,
+    expiredRecoveryNote = !approvalControl
+      ? "A compatibility update is needed before Astra can continue this request."
+      : !t
+        ? "The original task is no longer available to Astra."
+        : !t.managed
+          ? "Codex desktop owns this task, so the decision must be completed there."
+          : `Allowing this will resume the managed agent only for this exact ${approvalSubjectLabel}.`;
   let form = "";
   if (
     a.kind === "approval" &&
@@ -993,7 +1209,7 @@ function renderAction(a, t, d, error = "") {
         "item/fileChange/requestApproval",
         "item/permissions/requestApproval",
       ].includes(p?.method);
-      form = `<div class="actions-row">${allow ? '<button class="primary" data-decision="accept">Approve this request</button>' : ""}<button class="danger" data-decision="${p?.params?.availableDecisions && !p.params.availableDecisions.includes("decline") && p.params.availableDecisions.includes("cancel") ? "cancel" : "decline"}">Decline</button></div>${!allow ? '<div class="notice warn">Complete this connector’s form in Codex. You can decline it here.</div>' : ""}`;
+      form = `<div class="actions-row">${allow ? `<button class="primary" data-decision="accept">Allow this ${esc(approvalSubjectLabel)}</button>` : ""}<button class="danger" data-decision="${p?.params?.availableDecisions && !p.params.availableDecisions.includes("decline") && p.params.availableDecisions.includes("cancel") ? "cancel" : "decline"}">Do not allow this ${esc(approvalSubjectLabel)}</button></div>${!allow ? '<div class="notice warn">Complete this connector’s form in Codex. You can decline it here.</div>' : ""}`;
     }
   }
   const fallbackMessages = t?.latest
@@ -1013,14 +1229,26 @@ function renderAction(a, t, d, error = "") {
     },
     review =
       a.kind === "approval"
-        ? `<div class="message assistant"><div class="rich-text">${renderRichText(a.body)}</div></div>`
+        ? `<section class="approval-request"><div class="eyebrow">AGENT’S EXACT REQUEST</div><div class="message assistant"><div class="rich-text">${renderRichText(a.body)}</div></div></section>`
         : reviewHtml(d?.messages || fallbackMessages, d?.git || fallbackGit);
   const ref = t?.sourceRefs?.[0],
     sourceLink = ref?.deepLink
       ? `<a href="${esc(ref.deepLink)}" ${ref.adapter === "codex" ? "" : 'target="_blank" rel="noreferrer"'}>Open in ${esc(sourceName(t))} ↗</a>`
       : "";
+  const blockedChoices =
+    a.kind !== "blocked"
+      ? ""
+      : !t
+        ? '<div class="notice warn">The original task is no longer available, so Astra cannot continue it.</div>'
+        : !t.sourceRefs?.some((source) => source.adapter === "codex")
+          ? `<div class="notice warn"><strong>This source owns the next move.</strong><br>${sourceLink ? "Open it there to resolve the blocker." : "This source does not expose a remote action, so resolve the blocker in the source workspace."}</div>`
+          : t.controlAvailable === false
+            ? `<div class="notice warn">${esc(t.controlReason || "Astra cannot control this Codex task until its compatibility check succeeds.")}</div>`
+            : t.owned && !t.managed
+              ? `<section class="action-choice"><div><div class="eyebrow">YOUR DECISION</div><strong>Choose what this task should do next</strong><p>Codex desktop owns this task. Open it there to continue, redirect, or leave it stopped.</p></div><a class="primary" href="codex://threads/${encodeURIComponent(t.id)}">Open in Codex to decide ↗</a></section>`
+              : `<section class="action-choice"><div><div class="eyebrow">YOUR DECISION</div><strong>Choose what this task should do next</strong><p>Continue resumes from the last safe checkpoint. Don’t continue tells the agent to stop and wait for a new direction.</p></div><div class="actions-row"><button class="primary" data-continue="${esc(t.key)}">Continue from safe checkpoint</button><button class="secondary" data-stop="${esc(t.key)}">Don’t continue</button><button class="secondary" data-focus-compose>Give a different direction</button></div></section>`;
   $("#panel-content").innerHTML =
-    `${t ? `<p class="quiet">${esc(hostName(t.hostId))} · ${esc(title(t))}</p>` : ""}${a.kind === "failure" || a.kind === "delivery" ? `<div class="notice warn"><strong>${esc(a.title)}</strong><br>${esc(a.body)}</div>` : ""}${review}${state.demo?.enabled && a.kind === "approval" ? '<div class="notice"><strong>Sample decision only.</strong><br>Approval controls are disabled because no agent is connected.</div>' : ""}${!approvalControl && a.kind === "approval" ? `<div class="notice warn"><strong>Approval controls disabled.</strong><br>${esc(approvalHost?.controlError || "This Codex protocol has not passed the compatibility probe.")}</div>` : ""}${error ? `<div class="notice warn">Live evidence could not be refreshed: ${esc(error)}</div>` : ""}${p ? `<details class="technical-details"><summary><span>Technical request details</span><small>Optional</small></summary><pre>${esc(JSON.stringify(p.params, null, 2))}</pre></details>` : ""}${a.status === "expired" ? '<div class="notice warn">The runtime connection changed, so this approval is invalid and cannot be reused. Resume or inspect the task in Codex and have the agent request approval again.</div>' : ""}${a.status === "responding" ? '<div class="notice">Decision submitted. Waiting for Codex to confirm resolution.</div>' : ""}<form id="decision-form">${form}</form><div class="actions-row">${t ? `<button class="secondary" data-task="${esc(t.key)}">Open full work</button>${sourceLink}` : ""}${(a.kind !== "approval" && a.status === "open") || a.status === "expired" ? `<button class="primary" data-resolve="${esc(a.id)}">Mark handled</button>` : ""}</div><p class="quiet">Created ${new Date(a.created_at).toLocaleString()}</p>`;
+    `${t ? `<p class="quiet">${esc(hostName(t.hostId))} · ${esc(title(t))}</p>` : ""}${a.kind === "approval" ? approvalContextHtml(p) : ""}${a.kind === "failure" || a.kind === "delivery" ? `<div class="notice warn"><strong>${esc(a.title)}</strong><br>${esc(a.body)}</div>` : ""}${review}${blockedChoices}${state.demo?.enabled && a.kind === "approval" ? '<div class="notice"><strong>Sample decision only.</strong><br>Approval controls are disabled because no agent is connected.</div>' : ""}${!approvalControl && a.kind === "approval" ? `<div class="notice warn"><strong>Approval controls disabled.</strong><br>${esc(approvalHost?.controlError || "This Codex protocol has not passed the compatibility probe.")}</div>` : ""}${error ? `<div class="notice warn">Live evidence could not be refreshed: ${esc(error)}</div>` : ""}${p ? `<details class="technical-details"><summary><span>Technical request details</span><small>Optional</small></summary><pre>${esc(JSON.stringify(p.params, null, 2))}</pre></details>` : ""}${a.status === "expired" ? `<div class="notice warn"><strong>This authorization expired before it was acted on.</strong><br>${esc(expiredRecoveryNote)}</div>` : ""}${a.status === "responding" ? '<div class="notice">Decision submitted. Waiting for Codex to confirm resolution.</div>' : ""}<form id="decision-form">${form}</form><div class="actions-row">${canDecideExpired ? `<button class="primary" data-expired-approval="${esc(a.id)}" data-expired-decision="accept">Allow this exact ${esc(approvalSubjectLabel)} and continue</button><button class="danger" data-expired-approval="${esc(a.id)}" data-expired-decision="decline">Do not allow this ${esc(approvalSubjectLabel)}</button>` : ""}${t ? `<button class="secondary" data-task="${esc(t.key)}">Open full work</button>${sourceLink}` : ""}${(a.kind !== "approval" && a.status === "open") || a.status === "expired" ? `<button class="secondary" data-resolve="${esc(a.id)}">${a.status === "expired" ? "Dismiss expired request" : "Mark handled"}</button>` : ""}</div><p class="quiet">Created ${new Date(a.created_at).toLocaleString()}</p>`;
   const decision = $("#decision-form");
   if (decision)
     decision.onsubmit = async (e) => {
@@ -1349,6 +1577,35 @@ document.addEventListener("click", async (e) => {
       });
       toast("Recommendation feedback recorded.");
     });
+  if (b.hasAttribute("data-briefing-refresh"))
+    await perform(b, async () => {
+      await api("/api/refresh", {});
+      toast("Astra refreshed the latest source status.");
+    });
+  if (b.dataset.briefingWatch)
+    await perform(b, async () => {
+      await api("/api/watch", { key: b.dataset.briefingWatch, value: true });
+      toast("Astra will keep this work visible for its next update.");
+    });
+  if (b.dataset.applyRecommendation) {
+    if (
+      /^archive this task/i.test(b.textContent || "") &&
+      !confirm("Archive this inactive task? It can be restored in Codex if needed.")
+    )
+      return;
+    await perform(b, async () => {
+      const result = await api("/api/briefing/apply", {
+        requestId: crypto.randomUUID(),
+        recommendationId: b.dataset.applyRecommendation,
+        evidenceRevision: b.dataset.revision,
+        taskKey: b.dataset.briefingTask || null,
+      });
+      if (result.status === "decision-needed" && result.actionId) {
+        toast(result.summary);
+        await openAction(result.actionId);
+      } else toast(result.summary || "Recommendation applied.");
+    });
+  }
   if (b.dataset.task) await openTask(b.dataset.task);
   if (b.dataset.watch) {
     const t = state.tasks.find((t) => t.key === b.dataset.watch);
@@ -1366,6 +1623,23 @@ document.addEventListener("click", async (e) => {
       $("#panel").hidden = true;
       panel = null;
     });
+  if (b.dataset.expiredApproval)
+    await perform(b, async () => {
+      const approved = b.dataset.expiredDecision === "accept";
+      await api("/api/approval/expired-decision", {
+        id: b.dataset.expiredApproval,
+        action: b.dataset.expiredDecision,
+        requestId: crypto.randomUUID(),
+      });
+      selectedActions.delete(b.dataset.expiredApproval);
+      $("#panel").hidden = true;
+      panel = null;
+      toast(
+        approved
+          ? "Approval sent to the agent for this exact request."
+          : "Request declined.",
+      );
+    });
   if (b.dataset.pause)
     await perform(b, async () => {
       await api("/api/pause", {
@@ -1373,6 +1647,24 @@ document.addEventListener("click", async (e) => {
         requestId: crypto.randomUUID(),
       });
       toast("Pause requested.");
+    });
+  if (b.dataset.continue)
+    await perform(b, async () => {
+      await api("/api/continue", {
+        key: b.dataset.continue,
+        requestId: crypto.randomUUID(),
+      });
+      toast("Task continued. Any new decision will appear here.");
+    });
+  if (b.dataset.stop)
+    await perform(b, async () => {
+      await api("/api/send", {
+        key: b.dataset.stop,
+        prompt:
+          "Do not continue the current approach or make any changes. The owner disagrees with this direction. Stop at this safe checkpoint and wait for a new owner instruction.",
+        requestId: crypto.randomUUID(),
+      });
+      toast("The agent was told not to continue and to wait for your direction.");
     });
   if (
     b.dataset.archive &&

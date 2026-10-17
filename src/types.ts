@@ -136,6 +136,7 @@ export interface BriefingEntry {
   evidence: string[];
   source: "deterministic" | "model";
   analysisMode?: "coordinator" | "shadow";
+  isAdvice?: boolean;
   confidence: StatusConfidence;
   updatedAt: number;
   priority: number;
@@ -247,6 +248,8 @@ export interface CoordinatorConfig {
   model?: string;
   reasoningEffort?: "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
   maxActions?: number;
+  /** A high-water safety rail for the complete coordinator prompt, not a daily budget. */
+  maxInputChars?: number;
 }
 export interface ShadowProjectBoundary {
   hostId: string;

@@ -682,7 +682,7 @@ export class Engine extends EventEmitter {
       actions = this.store.openActions(),
       proposals = this.store.coordinatorProposals(),
       feedback = this.store.briefingFeedback(),
-      analyses = this.store.shadowAnalyses();
+      analyses = this.store.unappliedShadowAnalyses();
     return {
       ...result,
       items: result.items.map((item) => {
@@ -715,7 +715,7 @@ export class Engine extends EventEmitter {
       this.store.coordinatorProposals(),
       this.store.briefingFeedback(),
       Date.now(),
-      this.store.shadowAnalyses(),
+      this.store.unappliedShadowAnalyses(),
     );
   }
   rateRecommendation(
@@ -733,7 +733,7 @@ export class Engine extends EventEmitter {
         this.store.openActions(),
         this.store.coordinatorProposals(),
         this.store.briefingFeedback(),
-        this.store.shadowAnalyses(),
+        this.store.unappliedShadowAnalyses(),
       ).recommendation;
     } else {
       recommendation = this.briefing().recommendations.items.find(
@@ -754,6 +754,175 @@ export class Engine extends EventEmitter {
     );
     this.emit("change");
     return saved;
+  }
+  async applyRecommendation(
+    requestId: string,
+    recommendationId: string,
+    evidenceRevision: string,
+    taskKey?: string | null,
+  ) {
+    const appliedShadow = this.store.shadowAnalysis(recommendationId);
+    if (
+      appliedShadow?.evidence_revision === evidenceRevision &&
+      this.store.shadowAnalysisApplied(recommendationId, evidenceRevision)
+    )
+      return {
+        status: "accepted",
+        summary: "This recommendation was already applied.",
+      };
+    const appliedProposal = this.store.coordinatorProposal(recommendationId);
+    if (
+      appliedProposal?.status === "executed" &&
+      appliedProposal.evidence_revision === evidenceRevision
+    )
+      return {
+        status: "accepted",
+        summary: "This recommendation was already applied.",
+      };
+    let recommendation;
+    if (taskKey) {
+      const item = this.store.workItem(taskKey);
+      if (!item) throw new Error("Recommendation task no longer exists");
+      recommendation = buildTaskBriefing(
+        this.withAvailability(item),
+        this.store.openActions(),
+        this.store.coordinatorProposals(),
+        this.store.briefingFeedback(),
+        this.store.unappliedShadowAnalyses(),
+      ).recommendation;
+    } else
+      recommendation = this.briefing().recommendations.items.find(
+        (entry) => entry.id === recommendationId,
+      );
+    if (
+      !recommendation ||
+      recommendation.id !== recommendationId ||
+      recommendation.evidenceRevision !== evidenceRevision ||
+      recommendation.source !== "model" ||
+      recommendation.isAdvice === false
+    )
+      throw new Error("This recommendation is stale; refresh the briefing");
+    if (recommendation.analysisMode === "coordinator")
+      return this.applyCoordinatorRecommendation(
+        requestId,
+        recommendationId,
+        evidenceRevision,
+      );
+    if (!taskKey) throw new Error("This recommendation needs a task");
+    const category = String(
+      recommendation.evidence
+        .find((line) => line.startsWith("Category:"))
+        ?.slice("Category:".length)
+        .trim() || "",
+    );
+    let result: any,
+      summary = "Astra will keep this work visible for its next update.";
+    if (category === "continue") {
+      result = await this.continueTask(requestId, taskKey);
+      summary = "The task was told to continue from its last safe checkpoint.";
+    } else if (category === "inspect") {
+      result = await this.send(
+        requestId,
+        taskKey,
+        "Review the latest result and interruption details. Report what stopped the work and the safest next action. Do not resume implementation or make changes until the owner gives a new instruction.",
+      );
+      summary = "Astra was asked to inspect the interruption and report the safest next action.";
+    } else if (category === "resolve-decision") {
+      if (recommendation.actionId)
+        return {
+          status: "decision-needed",
+          actionId: recommendation.actionId,
+          summary: "Review the exact decision before the task can continue.",
+        };
+      result = await this.send(
+        requestId,
+        taskKey,
+        "Review the current blocker and ask the owner one specific question needed to continue. Do not make changes until that question is answered.",
+      );
+      summary = "Astra was asked to identify the one decision needed to continue.";
+    } else if (category === "archive-candidate") {
+      result = await this.archive(requestId, taskKey);
+      summary = "The inactive task was archived. It can be restored in Codex if needed.";
+    } else if (category === "move-model-candidate") {
+      result = await this.send(
+        requestId,
+        taskKey,
+        "Prepare a model-change plan for this task: explain the expected benefit, risks, and exact model choice. Do not change the model or make implementation changes until the owner approves the plan.",
+      );
+      summary = "Astra was asked to prepare a model-change plan without changing the task.";
+    } else if (["wait", "watch", "keep"].includes(category)) {
+      this.watch(taskKey, true);
+    } else throw new Error("This recommendation has no safe action to run");
+    this.store.applyShadowAnalysis(recommendationId, evidenceRevision);
+    this.emit("change");
+    return { status: "accepted", summary, result };
+  }
+  private async applyCoordinatorRecommendation(
+    requestId: string,
+    recommendationId: string,
+    evidenceRevision: string,
+  ) {
+    const proposal = this.store.coordinatorProposal(recommendationId);
+    if (
+      !proposal ||
+      proposal.status !== "proposed" ||
+      proposal.evidence_revision !== evidenceRevision ||
+      !proposal.action
+    )
+      throw new Error("This recommendation is stale; refresh the briefing");
+    const action = proposal.action,
+      actionClass = policyAction(action.type, action.decision);
+    if (!actionClass || policyDecision("owner", actionClass) !== "allow")
+      throw new Error("This recommendation cannot be executed here");
+    let result: any,
+      summary = "Recommendation applied.";
+    if (action.type === "send") {
+      result = await this.send(requestId, action.taskKey, action.prompt);
+      summary = "Astra sent the recommended instruction to the task.";
+    } else if (action.type === "interrupt") {
+      result = await this.pause(requestId, action.taskKey);
+      summary = "Astra requested that the active task pause.";
+    } else if (action.type === "archive") {
+      result = await this.archive(requestId, action.taskKey);
+      summary = "Astra archived the inactive task.";
+    } else if (action.type === "create") {
+      result = await this.create(
+        requestId,
+        action.hostId,
+        action.projectId || null,
+        action.cwd,
+        action.title,
+        action.prompt,
+        action.isolate !== false,
+      );
+      summary = "Astra started the recommended task.";
+    } else if (action.type === "watch") {
+      this.watch(action.taskKey, action.value === true);
+      summary = action.value
+        ? "Astra will keep this task visible for updates."
+        : "Astra stopped watching this task.";
+    } else if (action.type === "resolve") {
+      this.store.resolveMany(action.actionIds || []);
+      summary = "Astra marked the selected handled items complete.";
+    } else if (action.type === "approval") {
+      const answers = Object.fromEntries(
+        (action.answers || []).map((answer: any) => [
+          answer.questionId,
+          answer.answer,
+        ]),
+      );
+      result = this.approval(action.actionId, {
+        action: action.decision,
+        answers,
+      });
+      summary = "Astra submitted the exact decision in this recommendation.";
+    } else if (action.type === "refresh") {
+      await this.refresh(true);
+      summary = "Astra refreshed the workspace evidence.";
+    } else throw new Error("This recommendation cannot be executed here");
+    this.store.setCoordinatorProposalStatus(recommendationId, "executed");
+    this.emit("change");
+    return { status: "accepted", summary, result };
   }
   private withAvailability(item: WorkItem) {
     if (this.config.mode === "demo") return item;
@@ -798,7 +967,7 @@ export class Engine extends EventEmitter {
         this.store.openActions(),
         this.store.coordinatorProposals(),
         this.store.briefingFeedback(),
-        this.store.shadowAnalyses(),
+        this.store.unappliedShadowAnalyses(),
       ),
     };
   }
@@ -936,6 +1105,13 @@ export class Engine extends EventEmitter {
         input: [{ type: "text", text: prompt }],
       });
     });
+  }
+  async continueTask(id: string, key: string) {
+    return this.send(
+      id,
+      key,
+      "Continue the task from its last safe checkpoint. Do not repeat a previously pending operation or treat an expired approval as permission. Request a new approval before any action that needs one.",
+    );
   }
   async create(
     id: string,
@@ -1309,6 +1485,41 @@ export class Engine extends EventEmitter {
     this.store.resolve(id, "responding");
     this.emit("change");
     return { status: "responding" };
+  }
+  async decideExpiredApproval(
+    id: string,
+    approvalId: string,
+    decision: "accept" | "decline",
+  ) {
+    const approval = this.store.actionById(approvalId);
+    if (
+      !approval ||
+      approval.kind !== "approval" ||
+      approval.status !== "expired"
+    )
+      throw new Error("Only an expired approval can be decided here");
+    if (!["accept", "decline"].includes(decision))
+      throw new Error("Choose whether to approve or decline this request");
+    if (decision === "decline") {
+      this.store.resolve(approval.id, "declined");
+      this.emit("change");
+      return { status: "declined" };
+    }
+    if (!approval.task_key)
+      throw new Error("The original task is no longer available");
+    const task = this.task(approval.task_key);
+    if (!task.managed)
+      throw new Error(
+        "This task is not managed by ThreadHelm, so its agent must be reopened in Codex to request a new decision.",
+      );
+    const sent = await this.send(
+      id,
+      approval.task_key,
+      "The owner has explicitly approved the previous request. Continue only with the exact scope you asked the owner to approve. Do not broaden it or infer permission for any other operation. If anything beyond that scope is needed, request a new approval.",
+    );
+    this.store.resolve(approval.id, "approved");
+    this.emit("change");
+    return sent;
   }
   close() {
     this.stopping = true;

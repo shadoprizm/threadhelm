@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "snapshots": [
+    {
+      "date": "2026-09-21",
+      "campaign_day": 1,
+      "kind": "baseline",
+      "source": "GitHub REST API via scripts/growth.py heartbeat --with-metrics",
+      "repository": "shadoprizm/threadhelm",
+      "github": {
+        "stars": 0,
+        "forks": 0,
+        "watchers": 0,
+        "open_issues_and_pull_requests": 2,
+        "unique_visitors_rolling_14_days": 0,
+        "views_rolling_14_days": 0,
+        "unique_cloners_rolling_14_days": 95,
+        "clones_rolling_14_days": 224,
+        "contributors_returned_by_api": 1
+      },
+      "funnel": {
+        "applications": null,
+        "qualified_operators": null,
+        "successful_installs": null,
+        "weekly_active_operators": null,
+        "activation_proxy": null,
+        "approved_proof": null
+      },
+      "notes": [
+        "Traffic and clone metrics are rolling 14-day totals, so this baseline includes activity before campaign day 1.",
+        "Funnel values are null because no verified opt-in tracking source has been connected; null must not be interpreted as zero."
+      ]
+    }
+  ]
+}

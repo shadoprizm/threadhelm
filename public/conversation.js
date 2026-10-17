@@ -174,6 +174,8 @@ export function conversationSignal(task,actions=[]){
  }
  const responding=related.find(action=>action.kind==='approval'&&action.status==='responding');
  if(responding)return {kind:'working',icon:'↗',label:'Answer sent',title:'Waiting for the agent to continue',body:'Your response was submitted. No further action is needed unless the agent asks again.'};
+ const blocked=related.find(action=>action.kind==='blocked');
+ if(blocked)return {kind:'action',icon:'!',label:'Your choice',title:blocked.title||'This task was interrupted',body:task.owned?'This task stopped before it could continue. Open it in Codex to review the latest report, then resume, redirect, or leave it stopped.':'This task stopped before it could continue. Review the latest report, then give the agent a clear next instruction or leave it stopped.',focusComposer:true,actionLabel:task.owned?'Open in Codex':'Choose what to do'};
  const problem=related.find(action=>['failure','delivery'].includes(action.kind));
  if(problem)return {kind:'action',icon:'!',label:'Next action',title:problem.title,body:problem.body,actionId:problem.id,actionLabel:'Review issue'};
  const latest=task.latest?.text||'';

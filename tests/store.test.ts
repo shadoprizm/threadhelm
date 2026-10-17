@@ -277,6 +277,125 @@ test("invalidated approvals stay expired and require a fresh request on the new 
     close();
   }
 });
+test("an expired managed approval accepts an explicit owner decision", async () => {
+  const { s, close } = setup();
+  const e = new Engine(
+    { port: 0, hosts: [{ id: "local", name: "Local", codex: "unused" }] },
+    s,
+    ".",
+  );
+  const h = e.host("local"), calls: any[] = [];
+  s.upsert(fixture);
+  s.manage(fixture.key);
+  const approval = s.action(
+    "approval",
+    "Review command",
+    "May I inspect the scheduled task?",
+    fixture.key,
+    "approval:expired",
+    { hostId: "local", method: "item/permissions/requestApproval", params: {} },
+  );
+  s.expireApprovals("local");
+  (h as any).snapshot = async () => [fixture];
+  (h.rpc as any).call = async (method: string, params: any) => {
+    calls.push({ method, params });
+    if (method === "thread/read") return { thread: { turns: [] } };
+    if (method === "turn/start") return { turn: { id: "replacement-turn" } };
+    return {};
+  };
+  try {
+    await e.decideExpiredApproval("expired-decision-1", approval.id, "accept");
+    assert.equal(s.actionById(approval.id)?.status, "approved");
+    assert.deepEqual(calls.map((call) => call.method), [
+      "thread/resume",
+      "thread/read",
+      "turn/start",
+    ]);
+    assert.match(calls[2].params.input[0].text, /explicitly approved/i);
+    assert.match(calls[2].params.input[0].text, /exact scope/i);
+  } finally {
+    e.close();
+    close();
+  }
+});
+test("declining an expired approval records the owner's decision", async () => {
+  const { s, close } = setup();
+  const e = new Engine(
+    { port: 0, hosts: [{ id: "local", name: "Local", codex: "unused" }] },
+    s,
+    ".",
+  );
+  const approval = s.action(
+    "approval",
+    "Review command",
+    "May I inspect the scheduled task?",
+    fixture.key,
+    "approval:decline",
+    { hostId: "local", method: "item/permissions/requestApproval", params: {} },
+  );
+  s.expireApprovals("local");
+  try {
+    const result = await e.decideExpiredApproval(
+      "expired-decision-2",
+      approval.id,
+      "decline",
+    );
+    assert.equal(result.status, "declined");
+    assert.equal(s.actionById(approval.id)?.status, "declined");
+  } finally {
+    e.close();
+    close();
+  }
+});
+test("continuing a task tells the agent to revalidate old approval state", async () => {
+  const { s, close } = setup();
+  const e = new Engine(
+    { port: 0, hosts: [{ id: "local", name: "Local", codex: "unused" }] },
+    s,
+    ".",
+  );
+  const h = e.host("local"), calls: any[] = [];
+  s.upsert({ ...fixture, status: "paused", turnStatus: "interrupted" });
+  s.manage(fixture.key);
+  (h as any).snapshot = async () => [fixture];
+  (h.rpc as any).call = async (method: string, params: any) => {
+    calls.push({ method, params });
+    if (method === "thread/read") return { thread: { turns: [] } };
+    if (method === "turn/start") return { turn: { id: "continued-turn" } };
+    return {};
+  };
+  try {
+    await e.continueTask("continue-request-1", fixture.key);
+    assert.deepEqual(calls.map((call) => call.method), [
+      "thread/resume",
+      "thread/read",
+      "turn/start",
+    ]);
+    assert.match(calls[2].params.input[0].text, /expired approval/i);
+    assert.match(calls[2].params.input[0].text, /new approval/i);
+  } finally {
+    e.close();
+    close();
+  }
+});
+test("reissued approval records remain in history without returning to the action inbox", () => {
+  const { s, close } = setup();
+  try {
+    const approval = s.action(
+      "approval",
+      "Review command",
+      "Old request",
+      fixture.key,
+      "approval:history-only",
+      {},
+    );
+    s.resolve(approval.id, "reissued");
+    assert.equal(s.actionById(approval.id)?.status, "reissued");
+    assert.equal(s.openActions().some((action) => action.id === approval.id), false);
+  } finally {
+    close();
+  }
+});
 test("offline machines retain their last snapshot without reporting a fresh observation", async () => {
   const { s, close } = setup();
   const e = new Engine(

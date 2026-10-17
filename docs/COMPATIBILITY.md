@@ -40,7 +40,7 @@ A Codex row being visible does not mean the hub owns its live connection.
 - Active desktop-owned tasks remain read-only and open in Codex through their deep link.
 - An idle, unowned task can be resumed when the runtime accepts it.
 - Tasks started by ThreadHelm use its App Server subprocess and expose the supported live actions while that connection remains valid.
-- Restarting or stopping the hub closes those subprocess connections. Pending approvals become invalid, must not be replayed, and must be requested again by the agent after the task resumes.
+- Restarting or stopping the hub closes those subprocess connections. Pending approvals become invalid and must not be replayed. For a dashboard-managed task, the expired decision panel makes clear that the prior response is gone and lets the owner either explicitly continue the exact request or decline it.
 - App Server and the local projections are version-sensitive. Incompatibility must fail visibly; ThreadHelm never edits the Codex database, authentication, permission policy, or desktop process.
 - The App Server initialization response is checked against an exact tested-version allowlist. An unknown version leaves observation available but disables send, create, steer, interrupt, archive, and approval responses until a disposable probe passes.
 
@@ -75,6 +75,7 @@ The live acceptance record dated 2026-09-19 verified:
 
 - Codex `0.154.0-alpha.6.2` on macOS;
 - Codex `0.151.0-alpha.7.2` on Linux;
+- Codex Desktop `0.155.0-alpha.9.2` and CLI `0.155.1` completed App Server initialization and a read-only thread inventory probe on macOS;
 - Claude Code transcript and live-session capture against local `2.1.266` records on macOS;
 - the pinned OpenClaw protocol-v4 client packages at `2026.8.1` against a fixture Gateway;
 - live inventory from Hermes, OpenClaw, and Open WebUI in the reference owner-only deployment;

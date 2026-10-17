@@ -14,7 +14,7 @@ See docs/HOSTING.md. Install a user service with `python3 scripts/install-linux.
 
 ## Updates and migration
 
-Finish or pause dashboard-managed work before restarting or moving the hub: the current version owns App Server subprocesses, so stopping it closes its runtime connections. Pending permission IDs become invalid after restart and must be requested again by the agent after the task resumes. Never replay an expired approval or an uncertain action automatically.
+Finish or pause dashboard-managed work before restarting or moving the hub: the current version owns App Server subprocesses, so stopping it closes its runtime connections. Pending permission IDs become invalid after restart and must never be replayed. For a dashboard-managed task, the owner can use the expired decision panel to explicitly allow the exact request to continue or decline it. Never retry an uncertain action automatically.
 
 Back up SQLite with its backup API or after stopping the hub; copying only a live `.sqlite` file can omit WAL data. Back up private configuration and connector credential/device files separately, preserving `0600` permissions. Preserve host and source IDs when moving the hub so task/source keys remain stable. Mark transferred managed sessions as unowned until their state is reconciled. Do not run two hubs against the same database.
 
@@ -24,7 +24,7 @@ The CLI login, SSH setup, and repository paths belong to each execution machine.
 
 ## Coordinator authority
 
-The coordinator runs only when the owner submits a coordinator message. Its default configuration is `{"model":"gpt-6-astra","reasoningEffort":"xhigh","maxActions":12}`; override those fields under `coordinator` in `data/config.json` when necessary. `supervisorName` changes its display name in the private dashboard.
+The coordinator runs only when the owner submits a coordinator message. Its default configuration is `{"model":"gpt-5.6-terra","reasoningEffort":"xhigh","maxActions":12,"maxInputChars":800000}`. `maxInputChars` is a generous high-water rail for one complete prompt, not a daily usage budget; it prevents a malformed or runaway workspace snapshot from crowding out the coordinator. Each completed coordinator message records reported token usage when Codex provides it, or a clearly labelled estimate otherwise. Override these fields under `coordinator` in `data/config.json` when necessary. `supervisorName` changes its display name in the private dashboard.
 
 Coordinator output is proposal-only in this release. The server does not execute emitted actions, including sends, creates, inbox resolution, or approval responses. Direct owner controls continue to use the command and approval paths. Their audit rows identify the actor, and the policy truth table in `src/policy.ts` denies autopilot execution until a later release deliberately enables bounded classes.
 

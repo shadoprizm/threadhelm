@@ -14,6 +14,15 @@ test("the Codex protocol probe enables only an explicitly tested version", () =>
   assert.equal(accepted.compatible, true);
   assert.equal(accepted.version, version);
 
+  for (const current of ["0.155.1", "0.155.0-alpha.9.2"])
+    assert.equal(
+      assessCodexProtocol({
+        userAgent: `Codex Desktop/${current} (Mac OS; arm64) terminal`,
+      }).compatible,
+      true,
+      current,
+    );
+
   const newerAlpha = assessCodexProtocol({
     userAgent: "Codex Desktop/0.155.0-alpha.1 (Linux; x86_64) terminal",
   });

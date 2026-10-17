@@ -115,7 +115,7 @@ ThreadHelm is not a replacement for each source’s native client.
 - Claude Code, Hermes, OpenClaw, and Open WebUI are observation-only in this release.
 - The standalone panel does not capture ChatGPT conversations or Codex Cloud tasks. Codex discovery is limited to the configured local or SSH runtime projections.
 - Existing desktop-owned Codex tasks cannot be steered or interrupted until their owning client releases them. Start a Codex task from ThreadHelm for its full supported control surface.
-- Managed Codex runtimes currently belong to hub subprocesses. Restarting the hub interrupts that ownership and invalidates pending approvals; those approval IDs are never replayed, so the agent must issue a new request after the task resumes.
+- Managed Codex runtimes currently belong to hub subprocesses. Restarting the hub interrupts that ownership and invalidates pending approvals; those approval IDs are never replayed. For dashboard-managed work, the decision panel makes the owner choose whether the agent may continue with the exact expired request or decline it.
 - Worktrees isolate directories; they do not prove that two task scopes are compatible or that their branches will merge cleanly.
 - A completed agent turn is a review checkpoint, not evidence that code was pushed, merged, deployed, or production-ready.
 - Runtime status reports observation freshness. An offline source does not prove that its remote agent stopped.
@@ -129,7 +129,7 @@ Permanent deletion, automatic retry, push, merge, deployment, and worktree remov
 - `hosts`: the hub machine plus optional SSH-reachable Codex machines;
 - `sources`: zero or more Claude Code, Hermes, OpenClaw, and Open WebUI adapters;
 - `runtime`: an optional loopback model/router inventory source;
-- `coordinator`: optional model, reasoning, and maximum-action settings;
+- `coordinator`: optional model, reasoning, maximum-action, and generous prompt high-water settings. `maxInputChars` protects against a malformed or runaway snapshot; it is not a daily token budget.
 - `shadowAnalysis`: optional proposal-only analysis, daily measurement limits, and explicit local-only project boundaries;
 - `supervisorName`: the private display name for the coordinator, such as `Astra`;
 - `publicOrigin` plus an authentication mode only when using authenticated HTTPS access.

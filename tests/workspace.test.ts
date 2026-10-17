@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {checkoutAssessment,filterInboxGroups,groupInboxActions,projectsForHost,uiStateFingerprint,workspaceTasks} from '../public/workspace.js';
+import {checkoutAssessment,filterInboxGroups,groupInboxActions,projectsForHost,uiStateFingerprint,workContext,workspaceTasks} from '../public/workspace.js';
 
 test('running workspace total includes unwatched active tasks',()=>{
  const tasks=[
@@ -41,6 +41,25 @@ test('project choices are deduplicated and disambiguated with their checkout pat
  assert.equal(choices.length,2);
  assert.match(choices[0].choiceLabel,/work\/client\/project|work\/internal\/project/);
  assert.notEqual(choices[0].choiceLabel,choices[1].choiceLabel);
+});
+
+test('work context identifies the saved project and its repository folder',()=>{
+ const projects=[
+  {id:'main',hostId:'local',name:'Astra Control',roots:['/work/astra-control'],source:'codex'},
+  {id:'docs',hostId:'local',name:'Documentation',roots:['/work/astra-control/docs'],source:'codex'}
+ ];
+ assert.deepEqual(workContext({hostId:'local',kind:'agent-task',projectId:'main',cwd:'/work/astra-control-worktree'},projects),{
+  kind:'Task',projectName:'Astra Control',repository:'astra-control-worktree',repositoryPath:'/work/astra-control-worktree'
+ });
+ assert.deepEqual(workContext({hostId:'local',kind:'conversation',cwd:'/work/astra-control/docs/guides'},projects),{
+  kind:'Conversation',projectName:'Documentation',repository:'guides',repositoryPath:'/work/astra-control/docs/guides'
+ });
+});
+
+test('work context states when a conversation has no linked project or repository',()=>{
+ assert.deepEqual(workContext({hostId:'local',kind:'conversation'},[]),{
+  kind:'Conversation',projectName:'',repository:'',repositoryPath:''
+ });
 });
 
 test('completion noise is grouped by task while live decisions remain individual',()=>{

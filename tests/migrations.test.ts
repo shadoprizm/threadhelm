@@ -31,7 +31,7 @@ test("ordered migrations back up an existing database and preserve an actor-audi
         .prepare("SELECT version FROM schema_migrations ORDER BY version")
         .all()
         .map((row: any) => row.version),
-      [1, 2, 3, 4, 5, 6],
+      [1, 2, 3, 4, 5, 6, 7],
     );
     assert.equal(store.command("legacy").actor, "owner");
     store.beginCommand(
@@ -45,7 +45,7 @@ test("ordered migrations back up an existing database and preserve an actor-audi
     store.close();
 
     const backups = readdirSync(join(directory, "migration-backups"));
-    assert.equal(backups.length, 4);
+    assert.equal(backups.length, 5);
     const actorBackupName = backups.find((name) => name.includes("before-v3"));
     assert.ok(actorBackupName);
     const backup = join(directory, "migration-backups", actorBackupName);

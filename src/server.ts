@@ -279,8 +279,33 @@ const server = createServer(
             ),
           );
         }
+        if (path === "/api/briefing/apply")
+          return json(
+            res,
+            200,
+            await engine.applyRecommendation(
+              requestId(b.requestId),
+              text(b.recommendationId, "recommendation", 200),
+              text(b.evidenceRevision, "evidence revision", 200),
+              optionalText(b.taskKey, "task", 300),
+            ),
+          );
         if (path === "/api/shadow-analysis/run")
           return json(res, 202, engine.triggerShadowAnalysis());
+        if (path === "/api/approval/expired-decision") {
+          const decision = text(b.action, "decision", 20);
+          if (decision !== "accept" && decision !== "decline")
+            throw new Error("Choose whether to approve or decline this request");
+          return json(
+            res,
+            200,
+            await engine.decideExpiredApproval(
+              requestId(b.requestId),
+              text(b.id, "action", 100),
+              decision,
+            ),
+          );
+        }
         if (path === "/api/approval")
           return json(res, 200, engine.approval(text(b.id, "action"), b));
         if (path === "/api/send")
@@ -291,6 +316,15 @@ const server = createServer(
               requestId(b.requestId),
               text(b.key, "task"),
               text(b.prompt, "message"),
+            ),
+          );
+        if (path === "/api/continue")
+          return json(
+            res,
+            200,
+            await engine.continueTask(
+              requestId(b.requestId),
+              text(b.key, "task"),
             ),
           );
         if (path === "/api/pause")

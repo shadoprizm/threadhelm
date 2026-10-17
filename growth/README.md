@@ -50,6 +50,8 @@ Good recruiting surfaces are your repository, launch posts people chose to read,
 
 Track these weekly in the generated growth brief. GitHub cannot infer successful installs or weekly use honestly, so those two fields require a maintainer or an explicit opt-in telemetry mechanism. Do not label guesses as users.
 
+The structured campaign baseline and later verified snapshots live in `metrics-history.json`. Use `null` for funnel values that have no verified source; never turn missing data into a zero. GitHub traffic and clone counts are rolling 14-day measurements, so the day-one snapshot may include pre-campaign activity.
+
 ## Automation boundary
 
 | Surface | Discover/measure | Generate draft | Publish or contact | Gate |
@@ -83,6 +85,7 @@ Pause launch activity if installation is unreliable, the queue contains unsuppor
 - `config.json`: dates, targets, search queries, and non-negotiable rules.
 - `schedule.json`: the complete 90-day milestone plan.
 - `content-queue.json`: channel-specific stories, states, and templates.
+- `metrics-history.json`: dated repository and verified funnel snapshots, beginning with the day-one baseline.
 - `templates/`: drafts with visible TODOs and approval checklists.
 - `.github/ISSUE_TEMPLATE/founding-operator.yml`: opt-in application.
 - `.github/workflows/growth-*.yml`: scheduled, repository-native operations.

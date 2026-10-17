@@ -14,6 +14,35 @@ export function uiStateFingerprint(value){
 
 const pathTail=(path,parts=3)=>String(path||'').replace(/[\\/]+$/,'').split(/[\\/]/).filter(Boolean).slice(-parts).join('/');
 
+const workKindLabel={
+ 'agent-task':'Task',
+ conversation:'Conversation',
+ automation:'Automation'
+};
+
+/**
+ * Identify the project and repository context that the source actually supplied
+ * for a work item. A saved project ID takes precedence; otherwise use the most
+ * specific saved root containing the item's working directory.
+ */
+export function workContext(item={},projects=[]){
+ const cwd=String(item.cwd||'').replace(/[\\/]+$/,'');
+ const scoped=projects.filter(project=>project.hostId===item.hostId);
+ const byId=item.projectId==null?undefined:scoped.find(project=>project.id===item.projectId);
+ const byRoot=cwd
+  ?scoped.flatMap(project=>(project.roots||[]).map(root=>({project,root:String(root||'').replace(/[\\/]+$/,'')})))
+   .filter(({root})=>root&&(cwd===root||cwd.startsWith(`${root}/`)||cwd.startsWith(`${root}\\`)))
+   .sort((a,b)=>b.root.length-a.root.length)[0]?.project
+  :undefined;
+ const project=byId||byRoot;
+ return {
+  kind:workKindLabel[item.kind]||'Work item',
+  projectName:project?.name||'',
+  repository:pathTail(cwd,1),
+  repositoryPath:cwd
+ };
+}
+
 export function projectChoiceLabel(project){
  const roots=[...new Set(project.roots||[])];
  const location=roots.length===1?pathTail(roots[0]):`${roots.length} checkouts`;

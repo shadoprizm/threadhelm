@@ -152,6 +152,52 @@ test("a shadow cycle records an inert recommendation without calling workspace m
   }
 });
 
+test("an owner click applies a shadow inspection through a fixed, bounded instruction", async () => {
+  const store = new Store(":memory:"),
+    engine = new Engine(
+      {
+        port: 0,
+        hosts: [{ id: "local", name: "Local", codex: "/fake/codex" }],
+        shadowAnalysis: { enabled: true, dailyCallLimit: 20 },
+      },
+      store,
+      ".",
+    );
+  let sent: any;
+  try {
+    store.upsert(task);
+    store.watch(task.key, true);
+    engine.shadowRunner = async () => ({ ...result, category: "inspect" });
+    await engine.runShadowCycle();
+    const recommendation = engine.workItems({ limit: 10 }).items[0].briefing
+      .recommendation;
+    (engine as any).send = async (id: string, key: string, prompt: string) => {
+      sent = { id, key, prompt };
+      return { status: "accepted" };
+    };
+    const applied = await engine.applyRecommendation(
+      "apply-shadow-inspection-1",
+      recommendation.id,
+      recommendation.evidenceRevision,
+      task.key,
+    );
+    assert.equal(applied.status, "accepted");
+    assert.equal(sent.key, task.key);
+    assert.match(sent.prompt, /report what stopped the work/i);
+    assert.doesNotMatch(sent.prompt, /deploy immediately/i);
+    assert.equal(
+      store.shadowAnalysisApplied(
+        recommendation.id,
+        recommendation.evidenceRevision,
+      ),
+      true,
+    );
+  } finally {
+    engine.close();
+    store.close();
+  }
+});
+
 test("local-only work is rejected before a cloud shadow prompt is constructed", async () => {
   const store = new Store(":memory:"),
     engine = new Engine(

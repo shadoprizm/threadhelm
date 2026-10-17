@@ -6,6 +6,8 @@ import type { HostConfig } from "./types.js";
 import { APP_VERSION } from "./version.js";
 
 export const TESTED_CODEX_PROTOCOL_VERSIONS = [
+  "0.155.1",
+  "0.155.0-alpha.9.2",
   "0.154.0-alpha.6.2",
   "0.151.0-alpha.7.2",
 ] as const;

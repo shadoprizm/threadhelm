@@ -77,8 +77,8 @@ test("open approvals become evidence-linked owner decisions and outrank status",
     brief = buildTaskBriefing(task, [action]);
   assert.equal(brief.decision?.actionId, action.id);
   assert.equal(brief.decision?.title, action.title);
-  assert.equal(brief.recommendation.title, "Review the pending decision");
-  assert.equal(brief.next.title, "Answer the open decision");
+  assert.equal(brief.recommendation.title, "No recommendation until you decide");
+  assert.equal(brief.next.title, "Waiting for your decision");
   assert.equal(brief.attentionScore, 100);
   assert.equal(brief.decision?.evidenceRevision, brief.evidenceRevision);
 });
@@ -131,9 +131,7 @@ test("a task-bound model proposal disappears when its evidence changes", () => {
     },
     changed = { ...task, status: "failed" as const, error: "New failure" },
     briefing = buildWorkspaceBriefing([changed], [], [proposal], [], now);
-  assert.equal(briefing.recommendations.total, 1);
-  assert.equal(briefing.recommendations.items[0].source, "deterministic");
-  assert.notEqual(briefing.recommendations.items[0].id, proposal.id);
+  assert.equal(briefing.recommendations.total, 0);
 });
 
 test("workspace briefing separates running work, decisions, recommendations, and next steps", () => {
@@ -161,12 +159,23 @@ test("workspace briefing separates running work, decisions, recommendations, and
     );
   assert.equal(briefing.nowRunning.total, 1);
   assert.equal(briefing.decisions.total, 1);
-  assert.equal(briefing.recommendations.total, 3);
+  assert.equal(briefing.recommendations.total, 0);
   assert.equal(briefing.nextSteps.total, 3);
   assert.equal(briefing.decisions.items[0].taskKey, waiting.key);
-  assert.equal(briefing.recommendations.items[0].taskKey, waiting.key);
+  assert.equal(
+    briefing.recommendations.items.some((entry) => entry.taskKey === waiting.key),
+    false,
+  );
   assert.equal(briefing.generatedAt, now);
   assert.match(briefing.evidenceRevision, /^[a-f0-9]{64}$/);
+});
+
+test("waiting work without a concrete decision does not masquerade as advice", () => {
+  const briefing = buildWorkspaceBriefing([item("waiting-no-action", "waiting")]);
+  assert.equal(briefing.decisions.total, 0);
+  assert.equal(briefing.recommendations.total, 0);
+  assert.equal(briefing.nextSteps.total, 1);
+  assert.equal(briefing.nextSteps.items[0].title, "Waiting for input");
 });
 
 test("stale model proposals are omitted from the current briefing", () => {
@@ -191,6 +200,5 @@ test("stale model proposals are omitted from the current briefing", () => {
       [],
       now,
     );
-  assert.equal(briefing.recommendations.items[0].source, "deterministic");
-  assert.notEqual(briefing.recommendations.items[0].id, "stale-proposal");
+  assert.equal(briefing.recommendations.total, 0);
 });
