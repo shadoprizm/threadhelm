@@ -2,6 +2,7 @@ import {
   checkoutAssessment,
   filterInboxGroups,
   groupInboxActions,
+  newAttentionActions,
   projectsForHost,
   uiStateFingerprint,
   workContext,
@@ -9,6 +10,7 @@ import {
 } from "./workspace.js";
 import {
   compactConversation,
+  completionReceipt,
   conversationSignal,
   plainPreview,
   renderRichText,
@@ -64,7 +66,9 @@ const drafts = new Map();
 const selectedActions = new Set();
 const expandedBriefingEvidence = new Set();
 let workFilterTimer,
-  renderedPageRevision = "";
+  renderedPageRevision = "",
+  notificationsInitialized = false;
+const notificationPreferenceKey = "operator-notifications";
 const ago = (t) => {
   if (!t) return "Not yet seen";
   const d = Math.max(0, (Date.now() - t) / 1000);
@@ -164,6 +168,87 @@ const shortTitle = (t) =>
   title(t).length > 180 ? title(t).slice(0, 177) + "…" : title(t);
 const activeActions = () =>
   state.actions.filter((a) => a.status !== "resolved");
+function notificationPreference() {
+  try {
+    return localStorage.getItem(notificationPreferenceKey) === "enabled";
+  } catch {
+    return false;
+  }
+}
+function setNotificationPreference(enabled) {
+  try {
+    localStorage.setItem(
+      notificationPreferenceKey,
+      enabled ? "enabled" : "disabled",
+    );
+  } catch {}
+}
+function notificationsEnabled() {
+  return (
+    "Notification" in window &&
+    Notification.permission === "granted" &&
+    notificationPreference()
+  );
+}
+function updateNotificationControl() {
+  const button = $("#notifications"),
+    supported = "Notification" in window,
+    enabled = notificationsEnabled(),
+    permission = supported ? Notification.permission : "unsupported";
+  button.hidden = !supported || !!state.demo?.enabled;
+  button.classList.toggle("active", enabled);
+  button.textContent = enabled ? "◆" : "♢";
+  button.setAttribute(
+    "aria-label",
+    enabled ? "Disable browser notifications" : "Enable browser notifications",
+  );
+  button.title = enabled
+    ? "Browser notifications are enabled"
+    : permission === "denied"
+      ? "Browser notifications are blocked in browser settings"
+      : "Notify me when work needs attention";
+}
+function deliverNotifications(previous, current) {
+  if (!notificationsInitialized) {
+    notificationsInitialized = true;
+    return;
+  }
+  if (
+    state.demo?.enabled ||
+    !notificationsEnabled() ||
+    (!document.hidden && document.hasFocus())
+  )
+    return;
+  const actions = newAttentionActions(previous, current);
+  const notifications =
+    actions.length > 3
+      ? [
+          {
+            id: `batch:${actions.length}:${actions[0].id}:${actions.at(-1).id}`,
+            title: `${actions.length} new actions need attention`,
+            body: actions
+              .slice(0, 3)
+              .map((action) => action.title || "Operator action")
+              .join(" · "),
+          },
+        ]
+      : actions;
+  for (const action of notifications) {
+    try {
+      const notification = new Notification("Work needs attention", {
+        body: `${action.title || "Operator action"}${action.body ? ` — ${plainPreview(action.body, 160)}` : ""}`,
+        tag: `operator-action:${action.id}`,
+      });
+      notification.onclick = () => {
+        window.focus();
+        view = "inbox";
+        inboxLimit = 24;
+        render();
+        notification.close();
+      };
+    } catch {}
+  }
+}
 function toast(text, error = false) {
   const t = $("#toast");
   t.textContent = text;
@@ -253,9 +338,11 @@ async function loadWork(reset = true) {
 }
 async function refreshMeta() {
   const tasks = state.tasks,
+    previousActions = state.actions,
     summary = await api("/api/state");
   state = { ...summary, tasks };
   csrf = state.csrf;
+  deliverNotifications(previousActions, state.actions);
 }
 function chatChanged(before, after) {
   return (
@@ -489,6 +576,7 @@ async function refresh() {
   try {
     const previous = state.tasks,
       previousHosts = state.hosts,
+      previousActions = state.actions,
       previousChat = state.chat,
       previousChatBusy = state.chatBusy,
       [summary, page] = await Promise.all([
@@ -498,6 +586,7 @@ async function refresh() {
     state = { ...summary, tasks: page.items };
     nextWorkCursor = page.nextCursor;
     csrf = state.csrf;
+    deliverNotifications(previousActions, state.actions);
     const pageScroll = { x: window.scrollX, y: window.scrollY };
     if (renderIfChanged()) window.scrollTo(pageScroll.x, pageScroll.y);
     if (
@@ -548,6 +637,7 @@ function render() {
     connected = state.hosts.filter((h) => h.online).length,
     demo = !!state.demo?.enabled;
   $("#demo-banner").hidden = !demo;
+  updateNotificationControl();
   $("#new-task").hidden = demo;
   $("#open-coordinator").hidden = demo;
   $("#connection").textContent = demo
@@ -942,9 +1032,9 @@ function repositoryHtml(g) {
   return `<details class="technical-details"><summary><span>Repository state</span><small>${esc(g.branch || "Detached HEAD")} · ${changed ? "Local changes" : "Clean"}</small></summary><div class="repo-summary">${esc(g.branch || "Detached HEAD")} · ${esc(g.head?.slice(0, 8))}<br>${g.upstream ? `${g.ahead ?? 0} ahead · ${g.behind ?? 0} behind ${esc(g.upstream)}` : "No upstream branch configured"}<br><small>Observed now from local refs; no fetch was run.</small></div><pre>${esc(g.status || "Working tree is clean.")}${g.diffStat ? "\n\nUnstaged changes\n" + esc(g.diffStat) : ""}${g.stagedStat ? "\n\nStaged changes\n" + esc(g.stagedStat) : ""}</pre></details>`;
 }
 function reviewHtml(messages, g) {
-  const summary = reviewSummary(messages, g),
-    final = summary.final;
-  return `<section class="result-review" id="latest-result"><div class="result-heading"><div><div class="eyebrow">LATEST RESULT</div><h3>${final ? "What the agent reported" : "No final response yet"}</h3></div>${final?.at ? `<time>${new Date(final.at).toLocaleString()}</time>` : ""}</div><div class="review-evidence"><div><span>Repository</span><strong>${esc(summary.repository)}</strong><small>${esc(summary.branch)}</small></div><div><span>Changed files</span><strong>${summary.changedFiles}</strong><small>Observed in Git status</small></div><div class="verification"><span>Verification</span><strong>${esc(summary.verification)}</strong></div></div>${final ? `<article class="message assistant final result-message"><div class="rich-text">${renderRichText(final.text)}</div></article>` : '<div class="empty compact">The agent has not published a final response for this turn.</div>'}</section>`;
+  const receipt = completionReceipt(messages, g),
+    final = receipt.final;
+  return `<section class="result-review completion-receipt ${esc(receipt.state)}" id="latest-result"><div class="result-heading"><div><div class="eyebrow">COMPLETION RECEIPT</div><h3>${final ? "Reported outcome and observed evidence" : "No final response yet"}</h3></div>${final?.at ? `<time>${new Date(final.at).toLocaleString()}</time>` : ""}</div><p class="receipt-intro">Agent claims and observed delivery evidence are shown separately so “done” is never confused with committed, merged, or deployed.</p><div class="review-evidence receipt-grid"><div><span>Outcome</span><strong>${esc(receipt.outcome)}</strong><small>${esc(receipt.outcomeDetail)}</small></div><div><span>Working tree</span><strong>${esc(receipt.workingTree)}</strong><small>${esc(receipt.branch)}</small></div><div><span>Source control</span><strong>${esc(receipt.sourceControl)}</strong><small>${g.head ? `Observed HEAD ${esc(String(g.head).slice(0, 8))}` : "No commit evidence available"}</small></div><div class="verification"><span>Verification reported</span><strong>${esc(receipt.verification)}</strong></div></div><div class="receipt-boundary"><span>Release boundary</span><strong>${esc(receipt.release)}</strong></div>${final ? `<article class="message assistant final result-message"><div class="rich-text">${renderRichText(final.text)}</div></article>` : '<div class="empty compact">The agent has not published a final response for this turn.</div>'}</section>`;
 }
 function renderDemoDetail(t, g, status, content, messages, scroll) {
   const summary = reviewSummary(messages, g),
@@ -1494,6 +1584,33 @@ $("#open-coordinator").onclick = renderChat;
 $("#connection").onclick = () => openMachines();
 $("#refresh").onclick = (e) =>
   perform(e.currentTarget, () => api("/api/refresh", {}));
+$("#notifications").onclick = async () => {
+  if (!("Notification" in window)) return;
+  if (notificationsEnabled()) {
+    setNotificationPreference(false);
+    updateNotificationControl();
+    toast("Browser notifications disabled.");
+    return;
+  }
+  const permission =
+    Notification.permission === "default"
+      ? await Notification.requestPermission()
+      : Notification.permission;
+  if (permission !== "granted") {
+    setNotificationPreference(false);
+    updateNotificationControl();
+    toast(
+      permission === "denied"
+        ? "Browser notifications are blocked. Enable them in your browser settings to use this alert channel."
+        : "Browser notifications were not enabled. You can try again when you’re ready.",
+      permission === "denied",
+    );
+    return;
+  }
+  setNotificationPreference(true);
+  updateNotificationControl();
+  toast("Browser notifications enabled for new actions that need you.");
+};
 $("#view-inbox").onclick = () => {
   view = "inbox";
   inboxLimit = 24;

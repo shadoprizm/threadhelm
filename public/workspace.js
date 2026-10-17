@@ -86,6 +86,16 @@ export function inboxCategory(action){
  return 'other';
 }
 
+const notificationKinds=new Set(['approval','failure','delivery','blocked','completion','review']);
+
+/** Return only newly surfaced, unresolved actions that merit operator attention. */
+export function newAttentionActions(previous=[],current=[]){
+ const seen=new Set(previous.map(action=>action.id));
+ return current
+  .filter(action=>action?.id&&!seen.has(action.id)&&action.status!=='resolved'&&notificationKinds.has(action.kind))
+  .sort((a,b)=>(a.created_at||0)-(b.created_at||0));
+}
+
 export function groupInboxActions(actions,tasks=[]){
  const taskMap=new Map(tasks.map(task=>[task.key,task]));
  const groups=new Map();

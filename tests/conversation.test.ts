@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {compactConversation,conversationSignal,plainPreview,renderRichText,reviewSummary,scrollTopAfterRender} from '../public/conversation.js';
+import {compactConversation,completionReceipt,conversationSignal,plainPreview,renderRichText,reviewSummary,scrollTopAfterRender} from '../public/conversation.js';
 
 const task=(status='idle',text='All requested work is done.')=>({
  key:'local:task-1',status,latest:{phase:'final_answer',text}
@@ -63,6 +63,35 @@ test('repeated technical projection rows collapse without hiding their frequency
 test('review summary prioritizes the final response and observed evidence',()=>{
  const summary=reviewSummary([{id:'f',role:'assistant',phase:'final_answer',text:'Implementation complete. All 12 tests passed.'}],{available:true,branch:'codex/work',status:' M app.js\n?? test.js'});
  assert.equal(summary.final.id,'f');assert.equal(summary.changedFiles,2);assert.equal(summary.repository,'Local changes');assert.match(summary.verification,/tests passed/i);
+});
+
+test('completion receipt separates agent claims from delivery evidence',()=>{
+ const messages=[{id:'f',role:'assistant',phase:'final_answer',text:'Implementation complete. All 12 tests passed.'}];
+ const local=completionReceipt(messages,{available:true,branch:'codex/work',head:'abc12345',upstream:'origin/codex/work',ahead:1,behind:0,status:' M app.js'});
+ assert.equal(local.outcome,'Agent report received');
+ assert.equal(local.workingTree,'1 uncommitted change');
+ assert.equal(local.sourceControl,'Uncommitted changes remain');
+ assert.equal(local.release,'Merge and deployment not verified');
+ assert.match(local.verification,/tests passed/i);
+
+ const committed=completionReceipt(messages,{available:true,branch:'codex/work',head:'abc12345',upstream:'origin/codex/work',ahead:2,behind:0,status:''});
+ assert.equal(committed.workingTree,'Clean working tree');
+ assert.equal(committed.sourceControl,'2 local commits ahead of origin/codex/work');
+
+ const synced=completionReceipt(messages,{available:true,branch:'codex/work',head:'abc12345',upstream:'origin/codex/work',ahead:0,behind:0,status:''});
+ assert.equal(synced.sourceControl,'Matches last-fetched origin/codex/work ref');
+ assert.match(synced.release,/not verified/i);
+
+ const diverged=completionReceipt(messages,{available:true,branch:'codex/work',head:'abc12345',upstream:'origin/codex/work',ahead:2,behind:3,status:''});
+ assert.equal(diverged.sourceControl,'Diverged: 2 ahead and 3 behind origin/codex/work');
+ assert.equal(diverged.state,'needs-work');
+});
+
+test('completion receipt does not promote an in-progress update to a final result',()=>{
+ const receipt=completionReceipt([{id:'p',role:'assistant',phase:'commentary',text:'Build checks passed so far; still deploying.'}],{available:true,status:''});
+ assert.equal(receipt.final,null);
+ assert.equal(receipt.outcome,'No final report yet');
+ assert.match(receipt.verification,/final response/i);
 });
 
 test('live conversation renders preserve the reader position and follow the bottom',()=>{
