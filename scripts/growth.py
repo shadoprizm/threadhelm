@@ -53,7 +53,7 @@ def today(value: str | None) -> dt.date:
 
 
 def campaign_day(config: dict[str, Any], on: dt.date) -> int:
-    return (on - parse_date(config["start_date"])).days + 1
+    return (on - campaign_start(config)).days + 1
 
 
 def campaign_week(day: int) -> int:
@@ -61,11 +61,20 @@ def campaign_week(day: int) -> int:
 
 
 def event_date(config: dict[str, Any], day: int) -> dt.date:
-    return parse_date(config["start_date"]) + dt.timedelta(days=day - 1)
+    return campaign_start(config) + dt.timedelta(days=day - 1)
 
 
 def markdown_escape(value: Any) -> str:
     return str(value or "").replace("|", "\\|").replace("\n", " ").strip()
+
+
+def campaign_state(config: dict[str, Any]) -> str:
+    return str(config.get("campaign_state", "frozen"))
+
+
+def campaign_start(config: dict[str, Any]) -> dt.date:
+    value = config.get("launch_date") or config["start_date"]
+    return parse_date(str(value))
 
 
 def validate() -> list[str]:
@@ -81,6 +90,25 @@ def validate() -> list[str]:
         errors.append("growth/schedule.json schema_version must be 1")
     if queue.get("schema_version") != 1:
         errors.append("growth/content-queue.json schema_version must be 1")
+
+    state = campaign_state(config)
+    if state not in {"frozen", "readiness", "active", "complete"}:
+        errors.append("campaign_state must be frozen, readiness, active, or complete")
+    approved_name = config.get("approved_product_name")
+    if state == "active" and (not isinstance(approved_name, str) or not approved_name.strip()):
+        errors.append("an active campaign requires approved_product_name")
+    if state == "active" and approved_name != config.get("product_name"):
+        errors.append("approved_product_name must exactly match product_name")
+    approved_repository = config.get("approved_repository")
+    if state == "active" and approved_repository != config.get("repository"):
+        errors.append("approved_repository must exactly match repository")
+    if state == "active" and not config.get("launch_date"):
+        errors.append("an active campaign requires launch_date")
+    if config.get("launch_date"):
+        try:
+            parse_date(str(config["launch_date"]))
+        except ValueError as error:
+            errors.append(f"invalid launch_date: {error}")
 
     try:
         parse_date(str(config["start_date"]))
@@ -138,10 +166,20 @@ def require_valid() -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
 
 def render_calendar(on: dt.date | None = None) -> str:
     config, schedule, _ = require_valid()
+    if campaign_state(config) != "active":
+        return textwrap.dedent(
+            f"""\
+            # Growth calendar suspended
+
+            Campaign state: **{campaign_state(config).upper()}**.
+
+            A dated launch calendar will be generated only after the product name, repository, and launch date are approved.
+            """
+        )
     lines = [
         f"# {config['campaign_name']}: 90-day calendar",
         "",
-        f"Start: {config['start_date']}  ",
+        f"Start: {campaign_start(config).isoformat()}  ",
         f"End: {event_date(config, config['duration_days']).isoformat()}  ",
         f"North star: {config['north_star']}",
         "",
@@ -187,6 +225,27 @@ def due_content(queue: dict[str, Any], start_day: int, end_day: int) -> list[dic
 
 def weekly_brief(on: dt.date) -> str:
     config, schedule, queue = require_valid()
+    if campaign_state(config) != "active":
+        state = campaign_state(config)
+        name_step = (
+            "Approve an exact product name and record it as `approved_product_name`."
+            if state == "frozen"
+            else "Confirm the approved campaign identity before activation."
+        )
+        return textwrap.dedent(
+            f"""\
+            # Growth readiness brief
+
+            Date: {on.isoformat()} · campaign state: **{state.upper()}**
+
+            - [ ] {name_step}
+            - [ ] Reconcile public main, the deployed commit, and every active checkout.
+            - [ ] Verify a clean install and the five-minute sample workspace journey.
+            - [ ] Set a new `launch_date`, then change `campaign_state` to `active`.
+
+            No launch drafts, star deadlines, releases, or outreach are due while the brand gate is unresolved.
+            """
+        )
     day = campaign_day(config, on)
     week = campaign_week(day)
     if day < 1:
@@ -239,6 +298,8 @@ def weekly_brief(on: dt.date) -> str:
 
 
 def render_item(config: dict[str, Any], item: dict[str, Any]) -> str:
+    if campaign_state(config) != "active":
+        raise ValueError("content rendering requires campaign_state=active")
     template_path = TEMPLATES / item["template"]
     content = template_path.read_text(encoding="utf-8")
     values = {
@@ -264,6 +325,16 @@ def render_item(config: dict[str, Any], item: dict[str, Any]) -> str:
 
 def content_drafts(on: dt.date, item_id: str | None, window: int) -> str:
     config, _, queue = require_valid()
+    if campaign_state(config) != "active":
+        return textwrap.dedent(
+            f"""\
+            # Content drafts blocked
+
+            Campaign state: **{campaign_state(config).upper()}**.
+
+            Draft generation is disabled until an exact product name and launch date are approved and `campaign_state` is `active`.
+            """
+        )
     if item_id:
         items = [item for item in queue["items"] if item["id"] == item_id]
         if not items:
@@ -323,12 +394,19 @@ def metrics_report(on: dt.date) -> str:
     traffic_views, views_error = optional_github_get(f"/repos/{repo}/traffic/views?per=day", token)
     traffic_clones, clones_error = optional_github_get(f"/repos/{repo}/traffic/clones?per=day", token)
     contributors, contributor_error = optional_github_get(f"/repos/{repo}/contributors?per_page=100&anon=1", token)
-    day = campaign_day(config, on)
-    target_day, target_stars = target_for_day(config, max(day, 1))
+    active = campaign_state(config) == "active"
+    if active:
+        day = campaign_day(config, on)
+        target_day, target_stars = target_for_day(config, max(day, 1))
+        heading = "# Star path dashboard"
+        status = f"Updated: {on.isoformat()} · campaign day {day} · next checkpoint {target_stars} stars by day {target_day}"
+    else:
+        heading = "# Repository metrics"
+        status = f"Updated: {on.isoformat()} · campaign state {campaign_state(config).upper()} · no star checkpoint is active"
     lines = [
-        "# Star path dashboard",
+        heading,
         "",
-        f"Updated: {on.isoformat()} · campaign day {day} · next checkpoint {target_stars} stars by day {target_day}",
+        status,
         "",
         "| Metric | Current |",
         "|---|---:|",
@@ -465,6 +543,28 @@ def discovery_report(on: dt.date, limit: int) -> str:
 
 def heartbeat(on: dt.date, include_metrics: bool) -> str:
     config, schedule, queue = require_valid()
+    if campaign_state(config) != "active":
+        state = campaign_state(config)
+        identity_status = (
+            "Exact replacement name has not been approved."
+            if state == "frozen"
+            else "The campaign is not active."
+        )
+        lines = [
+            "# Daily growth heartbeat",
+            "",
+            f"Date: {on.isoformat()} · campaign state: **{state.upper()}**",
+            "",
+            "## Readiness only",
+            "",
+            f"- {identity_status}",
+            "- The 90-day clock and star checkpoints are suspended.",
+            "- Launch drafts, releases, public distribution, and outreach remain blocked.",
+            "- Product validation and repository metrics may continue.",
+        ]
+        if include_metrics:
+            lines.extend(["", "---", "", metrics_report(on)])
+        return "\n".join(lines).rstrip() + "\n"
     day = campaign_day(config, on)
     start_day = max(1, day)
     upcoming = relevant_events(schedule, start_day, min(config["duration_days"], start_day + 2))

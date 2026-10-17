@@ -1,5 +1,10 @@
 {
   "schema_version": 1,
+  "campaign_state": "frozen",
+  "campaign_id": "prelaunch-2026-09",
+  "approved_product_name": null,
+  "approved_repository": null,
+  "launch_date": null,
   "campaign_name": "Path to 1,000 GitHub stars",
   "product_name": "ThreadHelm",
   "repository": "shadoprizm/threadhelm",

@@ -6,14 +6,28 @@ on:
 
 permissions:
   contents: read
-  issues: write
 
 jobs:
-  acknowledge:
+  gate:
     if: startsWith(github.event.issue.title, '[Founding Operator]')
     runs-on: ubuntu-latest
+    outputs:
+      campaign_state: ${{ steps.campaign.outputs.state }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Read campaign state
+        id: campaign
+        run: echo "state=$(python3 -c 'import json; print(json.load(open(\"growth/config.json\"))[\"campaign_state\"])')" >> "$GITHUB_OUTPUT"
+
+  acknowledge:
+    needs: gate
+    if: needs.gate.outputs.campaign_state == 'active'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Create program labels
         env:
           GH_TOKEN: ${{ github.token }}
